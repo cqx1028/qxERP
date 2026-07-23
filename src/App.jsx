@@ -422,7 +422,7 @@ const exportToExcel = (data, filename) => {
 }
 
 // ==================== 顶部工具栏 ====================
-const TopToolbar = ({ onRefresh, loading, sellerInfo }) => (
+const TopToolbar = ({ onRefresh, loading, sellerInfo, autoRefresh, setAutoRefresh, countdown, lastRefreshTime }) => (
   <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-2 flex items-center justify-between text-sm">
     <div className="flex items-center gap-4">
       <div className="flex items-center gap-2">
@@ -464,6 +464,22 @@ const TopToolbar = ({ onRefresh, loading, sellerInfo }) => (
         <Icon name="refresh" size={14} className={loading ? 'animate-spin' : ''} />
         <span>{loading ? '同步中' : '刷新数据'}</span>
       </button>
+      {autoRefresh && (
+        <div className="flex items-center gap-1.5 text-xs">
+          <div className={`w-2 h-2 rounded-full ${countdown <= 5 ? 'bg-red-400 animate-pulse' : 'bg-green-400'}`} />
+          <span className="text-white/70">{countdown}s</span>
+        </div>
+      )}
+      <button onClick={() => setAutoRefresh(!autoRefresh)} disabled={loading}
+        className={`text-xs px-2 py-1 rounded transition-colors ${autoRefresh ? 'bg-green-500/30 hover:bg-green-500/40' : 'bg-white/10 hover:bg-white/20'}`}
+        title={autoRefresh ? '暂停自动刷新' : '开启自动刷新'}>
+        {autoRefresh ? '⏸ 暂停' : '▶ 自动'}
+      </button>
+      {lastRefreshTime && (
+        <span className="text-xs text-white/60" title={new Date(lastRefreshTime).toLocaleString()}>
+          同步于 {new Date(lastRefreshTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+        </span>
+      )}
       <span className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
         🟢 真实API
       </span>
@@ -540,27 +556,34 @@ const Sidebar = ({ active, setActive }) => {
 // ==================== 统计卡片 ====================
 const StatCard = ({ icon, label, value, sub, trend, color = 'blue' }) => {
   const colorMap = {
-    blue: 'bg-blue-50 text-blue-600',
-    green: 'bg-green-50 text-green-600',
-    yellow: 'bg-yellow-50 text-yellow-600',
-    red: 'bg-red-50 text-red-600',
-    purple: 'bg-purple-50 text-purple-600',
+    blue: 'from-blue-500 to-blue-600',
+    green: 'from-emerald-500 to-teal-600',
+    yellow: 'from-amber-400 to-orange-500',
+    red: 'from-red-500 to-rose-600',
+    purple: 'from-violet-500 to-purple-600',
+  }
+  const iconBg = {
+    blue: 'bg-blue-100 text-blue-600',
+    green: 'bg-emerald-100 text-emerald-600',
+    yellow: 'bg-amber-100 text-amber-600',
+    red: 'bg-red-100 text-red-600',
+    purple: 'bg-violet-100 text-violet-600',
   }
   return (
-    <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+    <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 group">
       <div className="flex items-start justify-between">
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${colorMap[color]}`}>
+        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${iconBg[color]}`}>
           <Icon name={icon} size={20} />
         </div>
         {trend !== undefined && (
-          <div className={`flex items-center gap-1 text-xs font-medium ${trend >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            <Icon name={trend >= 0 ? 'trending' : 'trendingDown'} size={13} />
+          <div className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${trend >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
+            <Icon name={trend >= 0 ? 'trending' : 'trendingDown'} size={12} />
             {trend >= 0 ? '+' : ''}{trend}%
           </div>
         )}
       </div>
-      <div className="mt-3">
-        <div className="text-2xl font-bold text-gray-800">{value}</div>
+      <div className="mt-4">
+        <div className="text-2xl font-bold text-gray-800 group-hover:text-blue-600 transition-colors">{value}</div>
         <div className="text-xs text-gray-400 mt-0.5">{label}</div>
         {sub && <div className="text-[11px] text-gray-400 mt-0.5">{sub}</div>}
       </div>
@@ -568,8 +591,44 @@ const StatCard = ({ icon, label, value, sub, trend, color = 'blue' }) => {
   )
 }
 
+// ==================== 骨架屏组件 ====================
+const SkeletonBlock = ({ className = '' }) => (
+  <div className={`animate-pulse bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 rounded ${className}`} />
+)
+
 // ==================== 仪表盘页面 ====================
 const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
+  // 加载中无数据 → 骨架屏
+  const loading = !orders?.length && !sellerInfo
+  if (loading) {
+    return (
+      <div className="p-6 space-y-6">
+        <h2 className="text-xl font-bold text-gray-800">
+          <SkeletonBlock className='h-7 w-32' />
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1,2,3,4].map(i => (
+            <div key={i} className="bg-white rounded-lg p-4 shadow-sm border border-gray-100">
+              <div className="flex items-start justify-between mb-3">
+                <SkeletonBlock className='w-10 h-10 rounded-lg' />
+              </div>
+              <SkeletonBlock className='h-8 w-20 mb-1' />
+              <SkeletonBlock className='h-3 w-16' />
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {[1,2].map(i => (
+            <div key={i} className="bg-white rounded-lg p-5 shadow-sm border border-gray-100">
+              <SkeletonBlock className='h-5 w-24 mb-4' />
+              <SkeletonBlock className='h-32 w-full' />
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   const pendingOrders = orders.filter(o => o.status === 'pending' || o.status === 'processing').length
   const todayStr = new Date().toISOString().slice(0, 10)
   const todayOrders = orders.filter(o => (o.date || '').startsWith(todayStr)).length
@@ -600,23 +659,23 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
   return (
     <div className="p-6 space-y-6 animate-slide-up">
       {/* 欢迎横幅 */}
-      <div className="text-center py-6 space-y-3">
-        <h1 className="text-2xl font-bold text-gray-800">
+      <div className="rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-600 text-white px-6 py-7 space-y-3 shadow-lg">
+        <h1 className="text-2xl font-bold">
           {inn ? (
-            <>{shopName} <span className="text-gray-400 text-base">/ {inn}</span></>
+            <>{shopName} <span className="text-blue-200 text-base font-normal">/ {inn}</span></>
           ) : (
             <>欢迎回来，布丁猫祝您早日成为 OZON 大卖!!!</>
           )}
         </h1>
-        <div className="flex items-center justify-center gap-3">
-          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-white/20 text-white backdrop-blur-sm">
             🟢 真实数据
           </span>
           {sellerInfo && (
             <>
-              <span className="text-xs text-gray-400">|</span>
-              <span className="text-xs text-gray-500">店铺评分: {avgRating} ⭐</span>
-              {sellerInfo.shipDelayRate && <span className="text-xs text-gray-500">配送延迟: {sellerInfo.shipDelayRate}</span>}
+              <span className="text-xs text-white/60">|</span>
+              <span className="text-xs text-white/80">店铺评分: {avgRating} ⭐</span>
+              {sellerInfo.shipDelayRate && <span className="text-xs text-white/60">配送延迟: {sellerInfo.shipDelayRate}</span>}
             </>
           )}
         </div>
@@ -624,42 +683,56 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
 
       <div className="grid grid-cols-2 gap-6">
         {/* 订单趋势 */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-gray-700">30天订单趋势</h3>
-            <span className="text-xs text-gray-400">{orders.length} 个订单</span>
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+              30天订单趋势
+            </h3>
+            <span className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">{orders.length} 个订单</span>
           </div>
           <div className="h-48 flex items-end gap-[2px]">
             {orderData.map((v, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                <div className="w-full bg-blue-500 rounded-t hover:bg-blue-600 transition-colors cursor-pointer"
-                  style={{ height: `${Math.max((v / maxOrder) * 100, v > 0 ? 2 : 0)}%`, minHeight: v > 0 ? '3px' : '0' }}
+              <div key={i} className="flex-1 flex flex-col items-center gap-1 group-bar">
+                <div className="w-full rounded-t cursor-pointer transition-all duration-150"
+                  style={{
+                    height: `${Math.max((v / maxOrder) * 100, v > 0 ? 2 : 0)}%`,
+                    minHeight: v > 0 ? '3px' : '0',
+                    background: v > 0 ? `linear-gradient(to top, #3b82f6, #60a5fa)` : 'transparent'
+                  }}
                   title={`${dayKeys[i]}: ${v}单`} />
               </div>
             ))}
           </div>
           <div className="flex justify-between mt-2 text-[10px] text-gray-400">
-            {days.filter((_, i) => i % 5 === 0).map(d => <span key={d}>{d}日</span>)}
+            {days.filter((_, i) => i % 5 === 0).map(d => <span key={d} className="font-medium">{d}日</span>)}
           </div>
         </div>
 
         {/* 上货趋势 */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-gray-700">30天上货趋势</h3>
-            <span className="text-xs text-gray-400">{products.length} 个商品</span>
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+              30天上货趋势
+            </h3>
+            <span className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">{products.length} 个商品</span>
           </div>
           <div className="h-48 flex items-end gap-[2px]">
             {uploadData.map((v, i) => (
               <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                <div className="w-full bg-green-500 rounded-t hover:bg-green-600 transition-colors cursor-pointer"
-                  style={{ height: `${Math.max((v / maxUpload) * 100, v > 0 ? 2 : 0)}%`, minHeight: v > 0 ? '3px' : '0' }}
+                <div className="w-full rounded-t cursor-pointer transition-all duration-150"
+                  style={{
+                    height: `${Math.max((v / maxUpload) * 100, v > 0 ? 2 : 0)}%`,
+                    minHeight: v > 0 ? '3px' : '0',
+                    background: v > 0 ? `linear-gradient(to top, #10b981, #34d399)` : 'transparent'
+                  }}
                   title={`${dayKeys[i]}: ${v}件`} />
               </div>
             ))}
           </div>
           <div className="flex justify-between mt-2 text-[10px] text-gray-400">
-            {days.filter((_, i) => i % 5 === 0).map(d => <span key={d}>{d}日</span>)}
+            {days.filter((_, i) => i % 5 === 0).map(d => <span key={d} className="font-medium">{d}日</span>)}
           </div>
         </div>
       </div>
@@ -1564,7 +1637,7 @@ const Inventory = ({ products, setProducts }) => {
 }
 
 // ==================== 系统设置页面 ====================
-const Settings = ({ apiConfig, setApiConfig }) => {
+const Settings = ({ apiConfig, setApiConfig, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) => {
   const [testing, setTesting] = useState(false)
   const [showKey, setShowKey] = useState(false)
 
@@ -1642,6 +1715,33 @@ const Settings = ({ apiConfig, setApiConfig }) => {
           </button>
         </div>
         <p className="text-xs text-gray-400">密钥仅保存在本地浏览器（localStorage），不会上传到任何服务器。</p>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 space-y-3">
+        <h3 className="text-sm font-semibold text-gray-800">自动刷新</h3>
+        <div className="flex items-center gap-4">
+          <button onClick={() => setAutoRefresh(!autoRefresh)}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${autoRefresh ? 'bg-blue-600' : 'bg-gray-300'}`}>
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoRefresh ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
+          <span className="text-sm text-gray-600">{autoRefresh ? '已开启' : '已关闭'}</span>
+        </div>
+        {autoRefresh && (
+          <div className="flex flex-wrap gap-2">
+            {[
+              { value: 30000, label: '30秒' },
+              { value: 60000, label: '1分钟' },
+              { value: 120000, label: '2分钟' },
+              { value: 300000, label: '5分钟' },
+            ].map(opt => (
+              <button key={opt.value} onClick={() => setRefreshInterval(opt.value)}
+                className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${refreshInterval === opt.value ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <p className="text-xs text-gray-400">切到其他标签页时自动暂停，回来继续。</p>
       </div>
 
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 flex items-center justify-between">
@@ -2145,6 +2245,43 @@ export default function App() {
   const [reviews, setReviews] = useState([])
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(false)
+  const [lastRefreshTime, setLastRefreshTime] = useState(null)
+
+  // 自动刷新设置
+  const [autoRefresh, setAutoRefresh] = useLocalStorage('qxerp.autoRefresh', true)
+  const [refreshInterval, setRefreshInterval] = useLocalStorage('qxerp.refreshInterval', 60000)
+  const [countdown, setCountdown] = useState(0)
+  const tabVisibleRef = useRef(true)
+  const refreshFnRef = useRef()
+
+  // 保持 refresh 引用最新
+  useEffect(() => { refreshFnRef.current = refresh }, [refresh])
+
+  // 页面可见性切换：切到后台暂停刷新
+  useEffect(() => {
+    const handler = () => { tabVisibleRef.current = !document.hidden }
+    document.addEventListener('visibilitychange', handler)
+    return () => document.removeEventListener('visibilitychange', handler)
+  }, [])
+
+  // 自动刷新计时器
+  useEffect(() => {
+    setCountdown(autoRefresh ? Math.floor(refreshInterval / 1000) : 0)
+    if (!autoRefresh || !apiConfig.clientId) return
+
+    const tick = () => {
+      setCountdown(prev => {
+        if (prev <= 1) {
+          if (tabVisibleRef.current) refreshFnRef.current()
+          return Math.floor(refreshInterval / 1000)
+        }
+        return prev - 1
+      })
+    }
+
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [autoRefresh, refreshInterval, apiConfig.clientId])
 
   const refresh = useCallback(() => {
     if (!apiConfig.clientId || !apiConfig.apiKey) {
@@ -2152,6 +2289,7 @@ export default function App() {
       return
     }
     setLoading(true)
+    setLastRefreshTime(Date.now())
     loadRealData().then(data => {
       let count = 0
       if (data.sellerInfo) { setSellerInfo(data.sellerInfo); count++ }
@@ -2192,16 +2330,16 @@ export default function App() {
     analytics: <AnalyticsPage analytics={analytics} orders={orders} />,
     research: <ProductResearch categories={categories} />,
     variant: <VariantBundle />,
-    settings: <Settings apiConfig={apiConfig} setApiConfig={setApiConfig} />,
+    settings: <Settings apiConfig={apiConfig} setApiConfig={setApiConfig} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />,
   }
 
   return (
     <LoginGate>
       <div className="flex flex-col h-screen overflow-hidden bg-gray-100">
-        <TopToolbar onRefresh={refresh} loading={loading} sellerInfo={sellerInfo} />
+        <TopToolbar onRefresh={refresh} loading={loading} sellerInfo={sellerInfo} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} countdown={countdown} lastRefreshTime={lastRefreshTime} />
         <div className="flex flex-1 overflow-hidden">
           <Sidebar active={active} setActive={setActive} />
-          <main className="flex-1 overflow-y-auto">
+          <main className="flex-1 overflow-y-auto animate-fadeIn">
             {pages[active] || pages.dashboard}
           </main>
         </div>
