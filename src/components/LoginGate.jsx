@@ -79,10 +79,9 @@ export default function LoginGate({ children }) {
     setBusy(true);
     try {
       const hash = await sha256(pwd);
-      // 预置密码：qxerp2026（明文仅首次登录使用，源码公开可改）
+      // SHA-256('qxerp2026') = d1e23be8e07451eb08303a08cfde1e235cb1dcf0110c9d3ac5fc34b45098bc78
       const ALLOW = {
-        // 默认密码：qxerp2026
-        '2c8e7c64e91c41f9b8e2c1a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d':
+        'd1e23be8e07451eb08303a08cfde1e235cb1dcf0110c9d3ac5fc34b45098bc78':
           'qxerp2026',
       };
       if (ALLOW[hash]) {
