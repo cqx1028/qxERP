@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import './index.css'
+import LoginGate from './components/LoginGate'
 import { testConnection } from './api/ozonApi'
 import { loadRealData } from './api/ozonAdapters'
 import { getCommissions } from './api/ozonApi'
@@ -477,6 +478,18 @@ const TopToolbar = ({ onRefresh, loading, sellerInfo }) => (
         <Icon name="user" size={16} />
         <span>19396067405</span>
       </div>
+      <button
+        onClick={() => window.__qxerpLogout && window.__qxerpLogout()}
+        title="退出登录"
+        className="ml-2 px-2 py-1 rounded hover:bg-white/20 text-xs flex items-center gap-1"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/>
+          <line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+        退出
+      </button>
     </div>
   </div>
 )
@@ -2183,15 +2196,17 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-gray-100">
-      <TopToolbar onRefresh={refresh} loading={loading} sellerInfo={sellerInfo} />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar active={active} setActive={setActive} />
-        <main className="flex-1 overflow-y-auto">
-          {pages[active] || pages.dashboard}
-        </main>
+    <LoginGate>
+      <div className="flex flex-col h-screen overflow-hidden bg-gray-100">
+        <TopToolbar onRefresh={refresh} loading={loading} sellerInfo={sellerInfo} />
+        <div className="flex flex-1 overflow-hidden">
+          <Sidebar active={active} setActive={setActive} />
+          <main className="flex-1 overflow-y-auto">
+            {pages[active] || pages.dashboard}
+          </main>
+        </div>
+        <ToastHost />
       </div>
-      <ToastHost />
-    </div>
+    </LoginGate>
   )
 }
