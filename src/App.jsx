@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import './index.css'
 import LoginGate from './components/LoginGate'
-import { testConnection } from './api/ozonApi'
+import { testConnection, cancelPosting, getPostingStatusHistory, CANCEL_REASONS } from './api/ozonApi'
 import { loadRealData } from './api/ozonAdapters'
 import { getCommissions } from './api/ozonApi'
 
@@ -1399,7 +1399,46 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
   const [selected, setSelected] = useState(new Set())
   const [detail, setDetail] = useState(null)
   const [showRaw, setShowRaw] = useState(false)
+  const [cancelState, setCancelState] = useState(null) // { mode:'bulk'|'single', ids:[], reason, message, loading }
+  const [history, setHistory] = useState(null)         // 状态历史（详情弹窗）
+  const [historyLoading, setHistoryLoading] = useState(false)
   const perPage = 15
+
+  // 是否可取消：未送达 / 未取消 / 未争议 均可取消
+  const isCancellable = (o) => o && o.status !== 'cancelled' && o.status !== 'delivered' && o.status !== 'disputed'
+
+  // 拉取状态历史（详情弹窗打开时调用）
+  useEffect(() => {
+    if (!detail) { setHistory(null); return }
+    let alive = true
+    setHistoryLoading(true)
+    getPostingStatusHistory([detail.id])
+      .then(list => { if (alive) setHistory(list?.[0]?.status_history || []) })
+      .catch(() => { if (alive) setHistory([]) })
+      .finally(() => { if (alive) setHistoryLoading(false) })
+    return () => { alive = false }
+  }, [detail])
+
+  // 打开取消弹窗（bulk=批量，single=单条）
+  const openCancel = (ids, mode) => {
+    setCancelState({ mode, ids: [...ids], reason: 'USER_CHANGED_MIND', message: '', loading: false })
+  }
+
+  // 确认取消
+  const confirmCancel = async () => {
+    if (!cancelState) return
+    setCancelState(s => ({ ...s, loading: true }))
+    let ok = 0, fail = 0
+    for (const id of cancelState.ids) {
+      try { await cancelPosting(id, cancelState.reason, cancelState.message); ok++ }
+      catch (e) { fail++; console.warn('[ERP] 取消失败', id, e.message) }
+    }
+    if (ok > 0) showToast(`已取消 ${ok} 条订单${fail ? `，${fail} 条失败` : ''}`, fail ? 'warning' : 'success')
+    else showToast('取消失败：接口无权限或未配置密钥', 'error')
+    setCancelState(null)
+    setSelected(new Set())
+    if (typeof onRefresh === 'function') onRefresh()
+  }
 
   // 复制文本到剪贴板
   const copyText = (text, label) => {
@@ -1590,6 +1629,12 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
                 setSelected(new Set())
               }} className="flex items-center gap-1.5 px-3 py-1.5 border border-orange-300 text-orange-600 rounded-lg text-xs font-medium hover:bg-orange-50 transition-colors">
                 <Icon name="download" size={13} /> 导出选中
+              </button>
+            )}
+            {selected.size > 0 && (
+              <button onClick={() => openCancel([...selected], 'bulk')}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-medium hover:bg-red-600 transition-colors">
+                <Icon name="x" size={13} /> 批量取消({selected.size})
               </button>
             )}
           </div>
@@ -1786,6 +1831,31 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
                 </div>
               )}
 
+              {/* 状态流转时间线 */}
+              <div>
+                <div className="text-xs font-semibold text-gray-500 mb-2">状态流转时间线</div>
+                {historyLoading ? (
+                  <div className="text-xs text-gray-400 flex items-center gap-1"><Icon name="refresh" size={12} className="animate-spin" /> 加载中...</div>
+                ) : history && history.length ? (
+                  <div className="space-y-0">
+                    {history.map((h, i) => (
+                      <div key={i} className="flex gap-3">
+                        <div className="flex flex-col items-center">
+                          <span className="w-2 h-2 rounded-full bg-blue-500 mt-1.5" />
+                          {i < history.length - 1 && <span className="w-px flex-1 bg-gray-200" />}
+                        </div>
+                        <div className="pb-3">
+                          <div className="text-xs text-gray-800">{h.status_name || h.status_code}</div>
+                          <div className="text-[10px] text-gray-400">{h.changed_state_date ? String(h.changed_state_date).replace('T', ' ').slice(0, 16) : ''}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-400">暂无状态历史（未配置密钥或接口无权限）</div>
+                )}
+              </div>
+
               {/* 原始 JSON（可折叠） */}
               <div>
                 <button onClick={() => setShowRaw(r => !r)}
@@ -1800,11 +1870,52 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
+                {isCancellable(detail) && (
+                  <button onClick={() => { setDetail(null); openCancel([detail.id], 'single') }}
+                    className="px-3 py-1.5 border border-red-300 text-red-600 rounded-lg text-xs hover:bg-red-50">取消订单</button>
+                )}
                 <button onClick={() => copyText(detail.id, '订单号')}
                   className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs hover:bg-gray-50">复制订单号</button>
                 <button onClick={() => { handleExport('csv', [detail]); setDetail(null) }}
                   className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs hover:bg-blue-700">导出此订单</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 取消订单确认弹窗 */}
+      {cancelState && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => !cancelState.loading && setCancelState(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-gray-800">取消订单</h3>
+              <button onClick={() => !cancelState.loading && setCancelState(null)} className="text-gray-400 hover:text-gray-600"><Icon name="close" size={18} /></button>
+            </div>
+            <div className="text-xs text-gray-500">
+              将取消 {cancelState.ids.length} 条订单。此操作通过 Ozon API 执行，不可撤销。
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600">取消原因</label>
+              <select value={cancelState.reason} onChange={e => setCancelState(s => ({ ...s, reason: e.target.value }))}
+                className="mt-1 w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                {CANCEL_REASONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600">补充说明（可选）</label>
+              <input value={cancelState.message} onChange={e => setCancelState(s => ({ ...s, message: e.target.value }))}
+                placeholder="例如：库存不足，已与买家沟通"
+                className="mt-1 w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => !cancelState.loading && setCancelState(null)}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs hover:bg-gray-50" disabled={cancelState.loading}>暂不取消</button>
+              <button onClick={confirmCancel} disabled={cancelState.loading}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs hover:bg-red-600 disabled:opacity-60">
+                {cancelState.loading && <Icon name="refresh" size={12} className="animate-spin" />}
+                {cancelState.loading ? '取消中...' : '确认取消'}
+              </button>
             </div>
           </div>
         </div>

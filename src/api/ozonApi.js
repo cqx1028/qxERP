@@ -22,6 +22,10 @@ export const OZON_ENDPOINTS = {
   categories:     '/v1/description-category/tree', // ✅ 实测成功
   // 评价（免费版无权限）
   reviews:        '/v1/review/list',
+  // 取消订单（FBO）
+  cancelFBO:       '/v2/posting/fbo/cancel',
+  // 状态历史（FBO）
+  statusHistoryFBO: '/v3/posting/fbo/status-history',
 }
 
 const getCredentials = () => {
@@ -112,6 +116,47 @@ export const getCategories = () => ozonRequest(OZON_ENDPOINTS.categories, {})
 // ---- 评价（免费版无权限，返回 PermissionDenied） ----
 export const getReviews = (params = {}) =>
   ozonRequest(OZON_ENDPOINTS.reviews, { limit: 20, offset: 0, ...params })
+
+// Ozon FBO 取消原因枚举（中文标签用于 UI 下拉）
+export const CANCEL_REASONS = [
+  { value: 'USER_CHANGED_MIND',            label: '买家改变主意' },
+  { value: 'OUT_OF_STOCK',                 label: '缺货' },
+  { value: 'SHOP_FAILED_TO_DELIVER',       label: '店铺无法配送' },
+  { value: 'BUYER_DID_NOT_PAY',            label: '买家未付款' },
+  { value: 'REPRICING_ERROR',              label: '改价错误' },
+  { value: 'PRICE_ERROR',                  label: '价格错误' },
+  { value: 'PRODUCT_NOT_AVAILABLE',        label: '商品不可用' },
+  { value: 'PRODUCT_DAMAGED',              label: '商品损坏' },
+  { value: 'PRODUCT_QUALITY_ISSUE',        label: '商品质量问题' },
+  { value: 'DELIVERY_DATE_LONG',           label: '配送时间过长' },
+  { value: 'DELIVERY_TARIFF_CHANGED',      label: '运费变更' },
+  { value: 'USER_REFUSED',                 label: '用户拒绝' },
+  { value: 'USER_WANTS_TO_CHANGE_ADDRESS', label: '买家想改地址' },
+  { value: 'TIMEOUT',                      label: '超时' },
+  { value: 'ORDER_ARCHIVED',               label: '订单已归档' },
+]
+
+// ---- 取消订单（FBO 写接口） ----
+/** 取消单个 FBO posting
+ *  @param {string} postingNumber
+ *  @param {string} cancelReason  Ozon 取消原因枚举
+ *  @param {string} [message]     可选说明
+ */
+export const cancelPosting = (postingNumber, cancelReason, message = '') =>
+  ozonRequest(OZON_ENDPOINTS.cancelFBO, {
+    posting_number: postingNumber,
+    cancel_reason: cancelReason,
+    cancel_reason_message: message,
+  })
+
+// ---- 状态历史（FBO 写接口，POST 查询） ----
+/** 批量查询 posting 状态变更历史
+ *  @param {string[]} postingNumbers
+ *  @returns {Promise<Array>} [{ posting_number, status_history: [{status_name,status_group,status_code,changed_state_date}] }]
+ */
+export const getPostingStatusHistory = (postingNumbers = []) =>
+  ozonRequest(OZON_ENDPOINTS.statusHistoryFBO, { posting_number: postingNumbers })
+    .then(r => Array.isArray(r) ? r : (r?.result || []))
 
 // ---- 测试连接 ----
 // ---- 类目佣金查询 ----
