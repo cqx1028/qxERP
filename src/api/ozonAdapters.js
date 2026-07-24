@@ -66,19 +66,33 @@ export const adaptOrders = (postings = []) => postings.map(p => {
     orderId:     p.order_id || '',
     customer:    'Ozon 买家',
     product:     prods.map(pr => `${pr.name || '商品'} x${pr.quantity || 1}`).join('，') || '—',
+    products:    prods.map(pr => ({
+      name:       pr.name || '商品',
+      sku:        pr.sku || '',
+      offer_id:   pr.offer_id || '',
+      quantity:   num(pr.quantity) || 1,
+      price:      num(pr.price) || 0,
+      currency:   pr.currency_code || 'CNY',
+    })),
     items:       prods.reduce((s, x) => s + num(x.quantity), 0),
     total,
     currency:    prods[0]?.currency_code || 'CNY',
     status:      innerStatus,
     ozonStatus:  p.status || '',       // 保留原始Ozon状态用于Tab分组
+    substatus:   p.substatus || '',     // Ozon 子状态（等待买家确认等）
     date:        isoDate(p.created_at),
-    address:     'Ozon 配送',
+    shipDate:    isoDate(p.shipment_date || p.ship_date) || '',
+    deliverDate: isoDate(p.delivered_date) || '',
+    address:     p.delivery_address || p.address || 'Ozon 配送',
     phone:       '—',
     tracking:    p.tracking_number || '—',
     note:        p.substatus ? `子状态: ${p.substatus}` : '',
     cancelReasonId: p.cancel_reason_id || 0,
+    cancelReason:   p.cancel_reason || '',
     warehouse:   p.warehouse_id || '',
     deliveryMethod: p.delivery_method || '',
+    // 原始 payload，供调试/详情展示
+    _raw:        p,
   }
 })
 

@@ -45,6 +45,7 @@ fs.writeFileSync(path.join(deployDir, '.nojekyll'), '');
 log(`▶ 步骤 4/4：推送到 ${BRANCH} 分支...`);
 try {
   run('git', ['init', '-q'], deployDir);
+  run('git', ['config', 'credential.helper', 'wincred'], deployDir);
   run('git', ['config', 'user.name', 'qxerp-deploy'], deployDir);
   run('git', ['config', 'user.email', 'deploy@qxerp.local'], deployDir);
   run('git', ['checkout', '-b', BRANCH, '-q'], deployDir);

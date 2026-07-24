@@ -195,6 +195,30 @@ const Icon = ({ name, size = 20, className = '' }) => {
         <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
       </svg>
     ),
+    copy: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="9" y="9" width="13" height="13" rx="2"/>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+      </svg>
+    ),
+    externalLink: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+        <polyline points="15 3 21 3 21 9"/>
+        <line x1="10" y1="14" x2="21" y2="3"/>
+      </svg>
+    ),
+    close: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <line x1="18" y1="6" x2="6" y2="18"/>
+        <line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    ),
+    sort: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M3 6h18M6 12h12M10 18h4"/>
+      </svg>
+    ),
     filter: (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
@@ -1365,12 +1389,31 @@ const Promotions = ({ promotions }) => {
   )
 }
 
-// ==================== 订单管理页面（7状态Tab + 自动拉取） ====================
+// ==================== 订单管理页面（7状态Tab + 统计 + 排序 + 批量 + 详情弹窗） ====================
 const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [sortKey, setSortKey] = useState('date') // date | total | items
+  const [sortDir, setSortDir] = useState('desc')
+  const [selected, setSelected] = useState(new Set())
+  const [detail, setDetail] = useState(null)
+  const [showRaw, setShowRaw] = useState(false)
   const perPage = 15
+
+  // 复制文本到剪贴板
+  const copyText = (text, label) => {
+    if (!text || text === '—') { showToast('无内容可复制', 'warning'); return }
+    try {
+      navigator.clipboard.writeText(String(text))
+      showToast(`已复制${label || '内容'}`, 'success')
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = String(text); document.body.appendChild(ta); ta.select()
+      document.execCommand('copy'); document.body.removeChild(ta)
+      showToast(`已复制${label || '内容'}`, 'success')
+    }
+  }
 
   // 7状态Tab统计（Ozon真实状态）
   const counts = {
@@ -1383,9 +1426,8 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
     cancelled: orders.filter(o => ['cancelled', 'cancelling', 'not_accepted'].includes(o.ozonStatus)).length,
   }
 
-  // 过滤逻辑：优先按ozonStatus分组，其次按innerStatus兜底
   const ozonStatusGroup = {
-    all:       () => true,
+    all:        () => true,
     pending:    o => ['pending','awaiting_packaging','awaiting_registration'].includes(o.ozonStatus),
     processing: o => ['processing','acceptance_in_progress'].includes(o.ozonStatus),
     shipped:    o => ['shipped','delivering','awaiting_deliver'].includes(o.ozonStatus),
@@ -1396,109 +1438,160 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
 
   const filtered = orders.filter(o => {
     if (!ozonStatusGroup[filter]?.(o)) return false
-    if (search && !o.id.toLowerCase().includes(search.toLowerCase()) && !o.customer.includes(search) && !o.product.includes(search)) return false
+    if (search) {
+      const q = search.toLowerCase()
+      if (!o.id.toLowerCase().includes(q) && !o.product.toLowerCase().includes(q) && !(o.tracking || '').toLowerCase().includes(q)) return false
+    }
     return true
   })
 
-  const paginated = filtered.slice((page - 1) * perPage, page * perPage)
-  const totalPages = Math.ceil(filtered.length / perPage)
+  const sorted = [...filtered].sort((a, b) => {
+    let va, vb
+    if (sortKey === 'total') { va = parseFloat(a.total) || 0; vb = parseFloat(b.total) || 0 }
+    else if (sortKey === 'items') { va = a.items || 0; vb = b.items || 0 }
+    else { va = a.date || ''; vb = b.date || '' }
+    if (va < vb) return sortDir === 'asc' ? -1 : 1
+    if (va > vb) return sortDir === 'asc' ? 1 : -1
+    return 0
+  })
 
-  const handleExport = (fmt) => {
-    if (filtered.length === 0) { showToast('没有可导出的订单', 'warning'); return }
-    const rows = filtered.map(o => ({
+  const paginated = sorted.slice((page - 1) * perPage, page * perPage)
+  const totalPages = Math.ceil(sorted.length / perPage)
+
+  // 统计摘要
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const todayOrders = orders.filter(o => (o.date || '').slice(0, 10) === todayStr)
+  const monthStr = todayStr.slice(0, 7)
+  const monthOrders = orders.filter(o => (o.date || '').startsWith(monthStr))
+  const todayRevenue = todayOrders.reduce((s, o) => s + parseFloat(o.total || 0), 0)
+  const monthRevenue = monthOrders.reduce((s, o) => s + parseFloat(o.total || 0), 0)
+  const avgOrderValue = orders.length ? orders.reduce((s, o) => s + parseFloat(o.total || 0), 0) / orders.length : 0
+  const pendingCount = counts.pending + counts.processing
+
+  const handleExport = (fmt, rows = sorted) => {
+    if (rows.length === 0) { showToast('没有可导出的订单', 'warning'); return }
+    const data = rows.map(o => ({
       订单号: o.id, 客户: o.customer, 商品: o.product, 件数: o.items,
       金额: o.total + ' ' + (o.currency || '₽'),
       状态: (statusMap[o.status] && statusMap[o.status].label) || o.status,
       仓库配送: o.warehouse || o.deliveryMethod || '—',
-      物流单号: o.tracking, 备注: o.note || '',
-      下单时间: o.date,
+      物流单号: o.tracking, 备注: o.note || '', 下单时间: o.date,
     }))
     const name = `orders_export_${new Date().toISOString().slice(0, 10)}`
-    if (fmt === 'excel') exportToExcel(rows, name + '.xls')
-    else exportToCSV(rows, name + '.csv')
-    showToast(`已导出 ${rows.length} 条订单（${fmt === 'excel' ? 'Excel' : 'CSV'}）`, 'success')
+    if (fmt === 'excel') exportToExcel(data, name + '.xls')
+    else exportToCSV(data, name + '.csv')
+    showToast(`已导出 ${data.length} 条订单（${fmt === 'excel' ? 'Excel' : 'CSV'}）`, 'success')
+  }
+
+  const toggleSelect = (id) => {
+    setSelected(prev => {
+      const n = new Set(prev)
+      n.has(id) ? n.delete(id) : n.add(id)
+      return n
+    })
+  }
+  const toggleSelectAll = () => {
+    setSelected(prev => prev.size === paginated.length ? new Set() : new Set(paginated.map(o => o.id)))
   }
 
   const statusBadge = (o) => (
-    <span
-      title={o.ozonStatus ? `原始状态: ${o.ozonStatus}` : ''}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold cursor-default ${statusMap[o.status]?.color}`}
-    >
+    <span title={o.ozonStatus ? `原始状态: ${o.ozonStatus}` : ''}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${statusMap[o.status]?.color}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${statusMap[o.status]?.dot}`} />
       {statusMap[o.status]?.label}
     </span>
   )
 
   const tabList = [
-    { key: 'all',       label: '全部' },
-    { key: 'pending',   label: '等待备货' },
-    { key: 'processing',label: '等待发货' },
-    { key: 'shipped',  label: '运输中' },
-    { key: 'delivered',label: '已签收' },
-    { key: 'disputed', label: '有争议' },
-    { key: 'cancelled',label: '已取消' },
+    { key: 'all', label: '全部' }, { key: 'pending', label: '等待备货' },
+    { key: 'processing', label: '等待发货' }, { key: 'shipped', label: '运输中' },
+    { key: 'delivered', label: '已签收' }, { key: 'disputed', label: '有争议' },
+    { key: 'cancelled', label: '已取消' },
+  ]
+
+  const stats = [
+    { label: '今日营收', value: (orders[0]?.currency === 'CNY' ? '¥' : '₽') + todayRevenue.toLocaleString(), color: 'text-green-600', icon: 'money' },
+    { label: '本月营收', value: (orders[0]?.currency === 'CNY' ? '¥' : '₽') + monthRevenue.toLocaleString(), color: 'text-blue-600', icon: 'trending' },
+    { label: '平均客单价', value: (orders[0]?.currency === 'CNY' ? '¥' : '₽') + avgOrderValue.toFixed(0), color: 'text-purple-600', icon: 'cart' },
+    { label: '待处理', value: pendingCount, color: 'text-orange-600', icon: 'package' },
   ]
 
   return (
     <div className="p-6 space-y-4 animate-slide-up">
-      {/* 工具栏：状态Tab + 操作按钮 */}
+      {/* 统计摘要 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {stats.map(s => (
+          <div key={s.label} className="bg-white rounded-lg p-4 shadow-sm border border-gray-200 flex items-center gap-3">
+            <div className={`p-2 rounded-lg bg-gray-50 ${s.color}`}><Icon name={s.icon} size={18} /></div>
+            <div>
+              <div className="text-xs text-gray-400">{s.label}</div>
+              <div className={`text-lg font-bold ${s.color}`}>{s.value}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 工具栏 */}
       <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200 space-y-3">
-        {/* 7状态Tab */}
         <div className="flex items-center gap-1.5 flex-wrap">
           {tabList.map(t => (
-            <button
-              key={t.key}
-              onClick={() => { setFilter(t.key); setPage(1) }}
+            <button key={t.key} onClick={() => { setFilter(t.key); setPage(1) }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
-                filter === t.key
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
+                filter === t.key ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
               {t.label}
               <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
-                filter === t.key ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-500'
-              }`}>
+                filter === t.key ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-500'}`}>
                 {counts[t.key] ?? 0}
               </span>
             </button>
           ))}
         </div>
 
-        {/* 搜索 + 拉取 + 导出 */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <div className="relative">
               <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                value={search}
-                onChange={e => { setSearch(e.target.value); setPage(1) }}
-                placeholder="搜索订单号/客户/商品..."
-                className="pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg w-52 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <input value={search} onChange={e => { setSearch(e.target.value); setPage(1) }}
+                placeholder="搜索订单号/商品/物流单号..."
+                className="pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg w-56 focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
+            <select value={sortKey} onChange={e => { setSortKey(e.target.value); setPage(1) }}
+              className="py-1.5 px-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="date">按时间</option>
+              <option value="total">按金额</option>
+              <option value="items">按件数</option>
+            </select>
+            <button onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+              className="p-1.5 border border-gray-300 rounded-lg hover:bg-gray-50" title="切换升降序">
+              <Icon name="sort" size={14} className={sortDir === 'asc' ? 'rotate-180' : ''} />
+            </button>
+            {selected.size > 0 && (
+              <span className="text-xs text-blue-600 font-medium">已选 {selected.size} 条</span>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={onRefresh}
-              disabled={isLoading}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-            >
+            <button onClick={onRefresh} disabled={isLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors">
               <Icon name="refresh" size={13} className={isLoading ? 'animate-spin' : ''} />
               {isLoading ? '拉取中...' : '拉取新订单'}
             </button>
-            <button
-              onClick={() => handleExport('csv')}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors"
-            >
+            <button onClick={() => handleExport('csv')}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors">
               <Icon name="download" size={13} /> 导出CSV
             </button>
-            <button
-              onClick={() => handleExport('excel')}
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors"
-            >
+            <button onClick={() => handleExport('excel')}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors">
               <Icon name="fileText" size={13} /> 导出Excel
             </button>
+            {selected.size > 0 && (
+              <button onClick={() => {
+                const rows = orders.filter(o => selected.has(o.id))
+                handleExport('csv', rows)
+                setSelected(new Set())
+              }} className="flex items-center gap-1.5 px-3 py-1.5 border border-orange-300 text-orange-600 rounded-lg text-xs font-medium hover:bg-orange-50 transition-colors">
+                <Icon name="download" size={13} /> 导出选中
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1515,6 +1608,7 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr className="text-gray-500 text-xs">
+                <th className="w-8 px-3 py-3"><input type="checkbox" checked={selected.size === paginated.length && paginated.length > 0} onChange={toggleSelectAll} /></th>
                 <th className="text-left px-4 py-3 font-medium">订单号</th>
                 <th className="text-left px-4 py-3 font-medium">件数</th>
                 <th className="text-left px-4 py-3 font-medium">商品</th>
@@ -1523,13 +1617,24 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
                 <th className="text-left px-4 py-3 font-medium">仓库/配送</th>
                 <th className="text-left px-4 py-3 font-medium">下单时间</th>
                 <th className="text-left px-4 py-3 font-medium">物流单号</th>
+                <th className="w-8 px-3 py-3"></th>
               </tr>
             </thead>
             <tbody>
               {paginated.map((o, i) => (
-                <tr key={i} className="border-t border-gray-100 hover:bg-blue-50/40 transition-colors">
+                <tr key={i} className="border-t border-gray-100 hover:bg-blue-50/40 transition-colors cursor-pointer"
+                    onClick={() => setDetail(o)}>
+                  <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={selected.has(o.id)} onChange={() => toggleSelect(o.id)} />
+                  </td>
                   <td className="px-4 py-3">
-                    <div className="font-mono text-blue-600 text-xs">{o.id}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-blue-600 text-xs">{o.id}</span>
+                      <button onClick={e => { e.stopPropagation(); copyText(o.id, '订单号') }}
+                        className="text-gray-300 hover:text-blue-500 transition-colors" title="复制订单号">
+                        <Icon name="copy" size={12} />
+                      </button>
+                    </div>
                     {o.note && <div className="text-[10px] text-orange-500 mt-0.5 truncate max-w-[120px]">{o.note}</div>}
                   </td>
                   <td className="px-4 py-3 text-center">
@@ -1546,18 +1651,32 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
                   <td className="px-4 py-3">{statusBadge(o)}</td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{o.warehouse || o.deliveryMethod || '—'}</td>
                   <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{o.date}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-500">{o.tracking !== '—' ? o.tracking : '—'}</td>
+                  <td className="px-4 py-3">
+                    {o.tracking && o.tracking !== '—' ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-xs text-gray-500">{o.tracking}</span>
+                        <button onClick={e => { e.stopPropagation(); copyText(o.tracking, '物流单号') }}
+                          className="text-gray-300 hover:text-blue-500 transition-colors" title="复制物流单号">
+                          <Icon name="copy" size={12} />
+                        </button>
+                      </div>
+                    ) : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                    <button onClick={() => setDetail(o)} className="text-gray-300 hover:text-blue-500" title="查看详情">
+                      <Icon name="eye" size={14} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
 
-        {/* 分页 */}
-        {filtered.length > 0 && (
+        {sorted.length > 0 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">
             <span className="text-xs text-gray-400">
-              显示 {(page - 1) * perPage + 1}-{Math.min(page * perPage, filtered.length)} 条，共 {filtered.length} 条
+              显示 {(page - 1) * perPage + 1}-{Math.min(page * perPage, sorted.length)} 条，共 {sorted.length} 条
             </span>
             <div className="flex gap-1">
               <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
@@ -1574,6 +1693,122 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
           </div>
         )}
       </div>
+
+      {/* 订单详情弹窗 */}
+      {detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setDetail(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-gray-100 sticky top-0 bg-white">
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-gray-800">订单详情</h3>
+                <span className="font-mono text-xs text-blue-600">{detail.id}</span>
+                <button onClick={() => copyText(detail.id, '订单号')} className="text-gray-300 hover:text-blue-500" title="复制订单号">
+                  <Icon name="copy" size={13} />
+                </button>
+              </div>
+              <button onClick={() => setDetail(null)} className="text-gray-400 hover:text-gray-600">
+                <Icon name="close" size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* 状态 + 基础信息 */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">{statusBadge(detail)}</div>
+                <div className="text-xs text-gray-400">下单时间 {detail.date}</div>
+              </div>
+
+              {/* 商品列表 */}
+              <div>
+                <div className="text-xs font-semibold text-gray-500 mb-2">商品清单（{detail.items} 件）</div>
+                <div className="space-y-2">
+                  {(detail.products && detail.products.length ? detail.products : [{ name: detail.product || '—', quantity: detail.items, price: detail.total, currency: detail.currency }]).map((pr, idx) => (
+                    <div key={idx} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-xs text-gray-800 truncate" title={pr.name}>{pr.name}</div>
+                        {pr.sku && <div className="text-[10px] text-gray-400 font-mono mt-0.5">{pr.sku}</div>}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="text-gray-400">x{pr.quantity}</span>
+                        <span className="font-bold text-gray-800">
+                          {(pr.currency === 'CNY' ? '¥' : '₽')}{((pr.price || 0) * (pr.quantity || 1)).toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+                  <span className="text-sm font-semibold text-gray-600">订单总额</span>
+                  <span className="text-lg font-bold text-blue-600">
+                    {detail.currency === 'CNY' ? '¥' : '₽'}{parseFloat(detail.total).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {/* 物流信息 */}
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <div className="text-gray-400 mb-1">物流单号</div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-gray-700">{detail.tracking && detail.tracking !== '—' ? detail.tracking : '—'}</span>
+                    {detail.tracking && detail.tracking !== '—' && (
+                      <button onClick={() => copyText(detail.tracking, '物流单号')} className="text-gray-300 hover:text-blue-500">
+                        <Icon name="copy" size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <div className="text-gray-400 mb-1">配送方式</div>
+                  <div className="text-gray-700">{detail.deliveryMethod || detail.warehouse || '—'}</div>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <div className="text-gray-400 mb-1">发货时间</div>
+                  <div className="text-gray-700">{detail.shipDate || '—'}</div>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <div className="text-gray-400 mb-1">签收时间</div>
+                  <div className="text-gray-700">{detail.deliverDate || '—'}</div>
+                </div>
+              </div>
+
+              {detail.cancelReason && (
+                <div className="text-xs text-red-500 bg-red-50 rounded-lg p-3">
+                  取消原因：{detail.cancelReason}
+                </div>
+              )}
+
+              {/* 原始状态 */}
+              {detail.ozonStatus && (
+                <div className="text-xs text-gray-400">
+                  原始 Ozon 状态：<span className="font-mono">{detail.ozonStatus}</span>
+                  {detail.substatus && <span className="ml-2">子状态：<span className="font-mono">{detail.substatus}</span></span>}
+                </div>
+              )}
+
+              {/* 原始 JSON（可折叠） */}
+              <div>
+                <button onClick={() => setShowRaw(r => !r)}
+                  className="text-xs text-blue-500 hover:underline flex items-center gap-1">
+                  <Icon name="info" size={12} /> {showRaw ? '隐藏' : '查看'}原始数据
+                </button>
+                {showRaw && (
+                  <pre className="mt-2 bg-gray-900 text-gray-100 text-[10px] p-3 rounded-lg overflow-x-auto max-h-60">
+                    {JSON.stringify(detail._raw || detail, null, 2)}
+                  </pre>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={() => copyText(detail.id, '订单号')}
+                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs hover:bg-gray-50">复制订单号</button>
+                <button onClick={() => { handleExport('csv', [detail]); setDetail(null) }}
+                  className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs hover:bg-blue-700">导出此订单</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
