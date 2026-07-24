@@ -657,12 +657,12 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
   const pendingOrders = orders.filter(o => o.status === 'pending' || o.status === 'processing').length
   const todayStr = new Date().toISOString().slice(0, 10)
   const todayOrders = orders.filter(o => (o.date || '').startsWith(todayStr)).length
-  // 真实数据：从 analytics 取 30 天总收入；否则从订单算
+  // 从 analytics 取 30 天总收入；否则从已签收订单算
   const totalRevenue = analytics?.totalRevenue
     || orders.filter(o => o.status === 'delivered').reduce((s, o) => s + parseFloat(o.total || 0), 0)
-  const avgRating = sellerInfo?.reviewScore || (products.reduce((s, p) => s + parseFloat(p.rating || 0), 0) / Math.max(products.length, 1)).toFixed(1)
+  const avgRating = sellerInfo?.reviewScore || (products.length > 0 ? (products.reduce((s, p) => s + parseFloat(p.rating || 0), 0) / products.length).toFixed(1) : null)
 
-  // 最近 30 天订单趋势
+  // 最近 30 天订单趋势（从真实订单聚合，无订单则全 0）
   const today = new Date()
   const dayKeys = Array.from({ length: 30 }, (_, i) => {
     const d = new Date(today); d.setDate(d.getDate() - (29 - i)); return d.toISOString().slice(0, 10)
@@ -671,17 +671,19 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
   const orderData = dayKeys.map(k => orders.filter(o => (o.date || '').slice(0, 10) === k).length)
   const maxOrder = Math.max(...orderData, 1)
 
-  // ---- 新增可视化数据 ---
+  // 每日营收（从已签收订单聚合）
   const dailyRevenue = dayKeys.map(k =>
     orders.filter(o => (o.date || '').slice(0, 10) === k && o.status === 'delivered')
       .reduce((s, o) => s + parseFloat(o.total || 0), 0))
   const maxRevenue = Math.max(...dailyRevenue, 1)
 
+  // Top 5 SKU 营收（从 analytics.rows 真实数据）
   const topSkus = (analytics?.rows || [])
     .map(r => ({ sku: (r.dimensions || ['?'])[0], revenue: Number(r.metrics?.[0]) || 0, orders: Number(r.metrics?.[1]) || 0, units: Number(r.metrics?.[2]) || 0 }))
     .sort((a, b) => b.revenue - a.revenue).slice(0, 5)
   const maxSkuRevenue = Math.max(...topSkus.map(s => s.revenue), 1)
 
+  // 订单状态分布（从真实订单统计）
   const statusColors = { pending: '#f59e0b', processing: '#3b82f6', shipped: '#8b5cf6', delivered: '#10b981', cancelled: '#ef4444', disputed: '#f97316' }
   const statusLabels = { pending: '待处理', processing: '处理中', shipped: '运输中', delivered: '已签收', cancelled: '已取消', disputed: '有争议' }
   const statusDist = ['pending', 'processing', 'shipped', 'delivered', 'cancelled', 'disputed']
@@ -691,7 +693,8 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
 
   const todayRevenueAmt = todayOrders.reduce((s, o) => s + parseFloat(o.total || 0), 0)
 
-  // 真实数据时显示店铺信息
+  // 真实数据标记
+  const hasRealData = orders.length > 0 || products.length > 0 || sellerInfo || analytics
   const shopName = sellerInfo?.name || '布丁猫'
   const inn = sellerInfo?.inn || ''
   const currency = sellerInfo?.currency || 'CNY'
@@ -701,22 +704,29 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
       {/* 欢迎横幅 */}
       <div className="rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-600 text-white px-6 py-7 space-y-3 shadow-lg">
         <h1 className="text-2xl font-bold">
-          {inn ? (
-            <>{shopName} <span className="text-blue-200 text-base font-normal">/ {inn}</span></>
+          {sellerInfo?.name ? (
+            <>{sellerInfo.name} <span className="text-blue-200 text-base font-normal">/ {sellerInfo.inn || '店铺'}</span></>
           ) : (
-            <>欢迎回来，布丁猫祝您早日成为 OZON 大卖!!!</>
+            <>Ozon ERP 数据面板</>
           )}
         </h1>
         <div className="flex items-center gap-3">
-          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-white/20 text-white backdrop-blur-sm">
-            🟢 真实数据
-          </span>
-          {sellerInfo && (
+          {hasRealData ? (
             <>
-              <span className="text-xs text-white/60">|</span>
-              <span className="text-xs text-white/80">店铺评分: {avgRating} ⭐</span>
-              {sellerInfo.shipDelayRate && <span className="text-xs text-white/60">配送延迟: {sellerInfo.shipDelayRate}</span>}
+              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-white/20 text-white backdrop-blur-sm">
+                🟢 真实数据
+              </span>
+              {sellerInfo && (
+                <>
+                  <span className="text-xs text-white/60">|</span>
+                  <span className="text-xs text-white/80">店铺评分: {avgRating || '—'} ⭐</span>
+                </>
+              )}
             </>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-white/20 text-white backdrop-blur-sm">
+              ⚪ 暂无数据
+            </span>
           )}
         </div>
       </div>
@@ -731,22 +741,28 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
             </h3>
             <span className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">{orders.length} 个订单</span>
           </div>
-          <div className="h-48 flex items-end gap-[2px]">
-            {orderData.map((v, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center gap-1 group-bar">
-                <div className="w-full rounded-t cursor-pointer transition-all duration-150"
-                  style={{
-                    height: `${Math.max((v / maxOrder) * 100, v > 0 ? 2 : 0)}%`,
-                    minHeight: v > 0 ? '3px' : '0',
-                    background: v > 0 ? `linear-gradient(to top, #3b82f6, #60a5fa)` : 'transparent'
-                  }}
-                  title={`${dayKeys[i]}: ${v}单`} />
-              </div>
-            ))}
-          </div>
-          <div className="flex justify-between mt-2 text-[10px] text-gray-400">
-            {days.filter((_, i) => i % 5 === 0).map(d => <span key={d} className="font-medium">{d}日</span>)}
-          </div>
+          {orders.length > 0 ? (
+            <div className="h-48 flex items-end gap-[2px]">
+              {orderData.map((v, i) => (
+                <div key={i} className="flex-1 flex flex-col items-center gap-1 group-bar">
+                  <div className="w-full rounded-t cursor-pointer transition-all duration-150"
+                    style={{
+                      height: `${Math.max((v / maxOrder) * 100, v > 0 ? 2 : 0)}%`,
+                      minHeight: v > 0 ? '3px' : '0',
+                      background: v > 0 ? `linear-gradient(to top, #3b82f6, #60a5fa)` : 'transparent'
+                    }}
+                    title={`${dayKeys[i]}: ${v}单`} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="h-48 flex items-center justify-center text-gray-400 text-sm">暂无订单数据</div>
+          )}
+          {orders.length > 0 && (
+            <div className="flex justify-between mt-2 text-[10px] text-gray-400">
+              {days.filter((_, i) => i % 5 === 0).map(d => <span key={d} className="font-medium">{d}日</span>)}
+            </div>
+          )}
         </div>
 
         {/* Top 5 SKU 营收排行 */}
@@ -758,28 +774,30 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
             </h3>
             <span className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">{topSkus.length} 个SKU</span>
           </div>
-          <div className="h-48 flex flex-col justify-center gap-[2px]">
-            {topSkus.length > 0 ? topSkus.map((s, i) => {
-              const pct = (s.revenue / maxSkuRevenue) * 100
-              const medals = ['🥇','🥈','🥉','','']
-              return (
-                <div key={i} className="flex items-center gap-2">
-                  <span className="w-4 text-xs text-center">{medals[i] || `#${i+1}`}</span>
-                  <span className="w-24 text-[10px] text-gray-600 truncate" title={s.sku}>{s.sku}</span>
-                  <div className="flex-1 h-5 bg-gray-100 rounded-md overflow-hidden flex items-center">
-                    <div className="h-full bg-gradient-to-r from-amber-400 to-orange-400 rounded-md transition-all duration-500"
-                      style={{ width: `${pct}%`, minWidth: s.revenue > 0 ? '2px' : '0' }} />
+          {topSkus.length > 0 ? (
+            <div className="h-48 flex flex-col justify-center gap-[2px]">
+              {topSkus.map((s, i) => {
+                const pct = (s.revenue / maxSkuRevenue) * 100
+                const medals = ['🥇','🥈','🥉','','']
+                return (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="w-4 text-xs text-center">{medals[i] || `#${i+1}`}</span>
+                    <span className="w-24 text-[10px] text-gray-600 truncate" title={s.sku}>{s.sku}</span>
+                    <div className="flex-1 h-5 bg-gray-100 rounded-md overflow-hidden flex items-center">
+                      <div className="h-full bg-gradient-to-r from-amber-400 to-orange-400 rounded-md transition-all duration-500"
+                        style={{ width: `${pct}%`, minWidth: s.revenue > 0 ? '2px' : '0' }} />
+                    </div>
+                    <span className="w-20 text-right text-xs font-medium text-gray-700">
+                      {currency === 'CNY' ? `¥${s.revenue.toLocaleString()}` : `₽${s.revenue.toLocaleString()}`}
+                    </span>
+                    <span className="w-8 text-right text-[10px] text-gray-400">{s.units}件</span>
                   </div>
-                  <span className="w-20 text-right text-xs font-medium text-gray-700">
-                    {currency === 'CNY' ? `¥${s.revenue.toLocaleString()}` : `₽${s.revenue.toLocaleString()}`}
-                  </span>
-                  <span className="w-8 text-right text-[10px] text-gray-400">{s.units}件</span>
-                </div>
-              )
-            }) : (
-              <div className="text-center text-gray-400 text-xs">暂无销售数据（需先拉取订单或配置 API）</div>
-            )}
-          </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="h-48 flex items-center justify-center text-gray-400 text-sm">暂无销售数据</div>
+          )}
         </div>
       </div>
 
@@ -791,27 +809,31 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
             <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
             30天营收趋势
           </h3>
-          <svg viewBox="0 0 500 180" className="w-full h-44" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3" />
-                <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02" />
-              </linearGradient>
-            </defs>
-            <polyline fill="none" stroke="#3b82f6" strokeWidth="2"
-              points={dailyRevenue.map((v, i) =>
-                `${((i + 0.5) / dailyRevenue.length) * 500},${180 - (v / maxRevenue) * 160}`
-              ).join(' ')} />
-            <polygon fill="url(#revGrad)"
-              points={`0,180 ${dailyRevenue.map((v, i) =>
-                `${((i + 0.5) / dailyRevenue.length) * 500},${180 - (v / maxRevenue) * 160}`
-              ).join(' ')} 500,180`} />
-            {dailyRevenue.filter((_, i) => i % 7 === 0).map((v, i) => (
-              <text key={i} x={((i * 7 + 0.5) / dailyRevenue.length) * 500} y="176" textAnchor="middle"
-                className="fill-gray-400" fontSize="9">
-                {new Date(dayKeys[i * 7]).getDate()}日</text>
-            ))}
-          </svg>
+          {orders.filter(o => o.status === 'delivered').length > 0 ? (
+            <svg viewBox="0 0 500 180" className="w-full h-44" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3" />
+                  <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02" />
+                </linearGradient>
+              </defs>
+              <polyline fill="none" stroke="#3b82f6" strokeWidth="2"
+                points={dailyRevenue.map((v, i) =>
+                  `${((i + 0.5) / dailyRevenue.length) * 500},${180 - (v / maxRevenue) * 160}`
+                ).join(' ')} />
+              <polygon fill="url(#revGrad)"
+                points={`0,180 ${dailyRevenue.map((v, i) =>
+                  `${((i + 0.5) / dailyRevenue.length) * 500},${180 - (v / maxRevenue) * 160}`
+                ).join(' ')} 500,180`} />
+              {dailyRevenue.filter((_, i) => i % 7 === 0).map((v, i) => (
+                <text key={i} x={((i * 7 + 0.5) / dailyRevenue.length) * 500} y="176" textAnchor="middle"
+                  className="fill-gray-400" fontSize="9">
+                  {new Date(dayKeys[i * 7]).getDate()}日</text>
+              ))}
+            </svg>
+          ) : (
+            <div className="h-44 flex items-center justify-center text-gray-400 text-sm">暂无已签收订单</div>
+          )}
         </div>
         {/* 订单状态分布环图 */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-shadow">
@@ -819,53 +841,57 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
             <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
             订单状态分布
           </h3>
-          <div className="flex items-center justify-center gap-6">
-            <svg width="140" height="140" viewBox="0 0 140 140">
-              {(() => {
-                const segs = []
-                let prevOff = 0
-                const circ = 2 * Math.PI * 48
-                statusDist.forEach(d => {
-                  const pct = (d.count / statusTotal) * 100
-                  const dashLen = (pct / 100) * circ
-                  const gapLen = circ - dashLen
-                  segs.push(
-                    <circle key={d.key} cx="70" cy="70" r="48" fill="none"
-                      stroke={d.color} strokeWidth="22"
-                      strokeDasharray={`${dashLen} ${gapLen}`}
-                      strokeDashoffset={-prevOff}
-                      transform="rotate(-90 70 70)"
-                      className="transition-all duration-500"
-                      title={`${d.label}: ${d.count}单`} />
-                  )
-                  prevOff += dashLen
-                })
-                return segs
-              })()}
-              <circle cx="70" cy="70" r="36" fill="white" />
-              <text x="70" y="66" textAnchor="middle" className="fill-gray-800" fontSize="20" fontWeight="bold">{orders.length}</text>
-              <text x="70" y="82" textAnchor="middle" className="fill-gray-400" fontSize="10">总订单</text>
-            </svg>
-            <div className="space-y-1.5">
-              {statusDist.map(d => (
-                <div key={d.key} className="flex items-center gap-2 text-xs">
-                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: d.color }} />
-                  <span className="text-gray-600 w-14">{d.label}</span>
-                  <span className="text-gray-800 font-medium">{d.count}</span>
-                  <span className="text-gray-400">{((d.count / statusTotal) * 100).toFixed(0)}%</span>
-                </div>
-              ))}
+          {statusDist.length > 0 ? (
+            <div className="flex items-center justify-center gap-6">
+              <svg width="140" height="140" viewBox="0 0 140 140">
+                {(() => {
+                  const segs = []
+                  let prevOff = 0
+                  const circ = 2 * Math.PI * 48
+                  statusDist.forEach(d => {
+                    const pct = (d.count / statusTotal) * 100
+                    const dashLen = (pct / 100) * circ
+                    const gapLen = circ - dashLen
+                    segs.push(
+                      <circle key={d.key} cx="70" cy="70" r="48" fill="none"
+                        stroke={d.color} strokeWidth="22"
+                        strokeDasharray={`${dashLen} ${gapLen}`}
+                        strokeDashoffset={-prevOff}
+                        transform="rotate(-90 70 70)"
+                        className="transition-all duration-500"
+                        title={`${d.label}: ${d.count}单`} />
+                    )
+                    prevOff += dashLen
+                  })
+                  return segs
+                })()}
+                <circle cx="70" cy="70" r="36" fill="white" />
+                <text x="70" y="66" textAnchor="middle" className="fill-gray-800" fontSize="20" fontWeight="bold">{orders.length}</text>
+                <text x="70" y="82" textAnchor="middle" className="fill-gray-400" fontSize="10">总订单</text>
+              </svg>
+              <div className="space-y-1.5">
+                {statusDist.map(d => (
+                  <div key={d.key} className="flex items-center gap-2 text-xs">
+                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: d.color }} />
+                    <span className="text-gray-600 w-14">{d.label}</span>
+                    <span className="text-gray-800 font-medium">{d.count}</span>
+                    <span className="text-gray-400">{((d.count / statusTotal) * 100).toFixed(0)}%</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="h-36 flex items-center justify-center text-gray-400 text-sm">暂无订单数据</div>
+          )}
         </div>
       </div>
 
       {/* 快捷统计 */}
       <div className="grid grid-cols-4 gap-4">
-        <StatCard icon="orders" label="待处理订单" value={pendingOrders} sub={`${orders.filter(o => o.status === 'pending' || o.status === 'processing').length} 笔待处理`} trend={pendingOrders > 0 ? 1 : 0} color="yellow" />
-        <StatCard icon="cart" label={`今天 (${todayStr.slice(5)})`} value={todayOrders} sub={`营收 ¥${todayRevenueAmt.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} trend={todayOrders > 0 ? 1 : 0} color="blue" />
-        <StatCard icon="money" label="30天营收" value={currency === 'CNY' ? `¥${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : `₽${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sub={`${orders.length} 个订单`} trend={Math.round((todayRevenueAmt / Math.max(totalRevenue, 1)) * 100)} color="green" />
-        <StatCard icon="star" label="店铺评分" value={`${avgRating} ⭐`} sub={`${products.length} 个商品`} trend={0} color="purple" />
+        <StatCard icon="orders" label="待处理订单" value={pendingOrders} sub={orders.length > 0 ? `${orders.filter(o => o.status === 'pending' || o.status === 'processing').length} 笔待处理` : '暂无订单'} trend={pendingOrders > 0 ? 1 : 0} color="yellow" />
+        <StatCard icon="cart" label={`今天 (${todayStr.slice(5)})`} value={todayOrders.length} sub={todayOrders.length > 0 ? `营收 ${currency === 'CNY' ? '¥' : '₽'}${todayRevenueAmt.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '暂无订单'} trend={todayOrders.length > 0 ? 1 : 0} color="blue" />
+        <StatCard icon="money" label="30天营收" value={currency === 'CNY' ? `¥${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : `₽${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sub={orders.length > 0 ? `${orders.length} 个订单` : '暂无已签收订单'} trend={totalRevenue > 0 ? Math.round((todayRevenueAmt / Math.max(totalRevenue, 1)) * 100) : 0} color="green" />
+        <StatCard icon="star" label="店铺评分" value={avgRating ? `${avgRating} ⭐` : '—'} sub={products.length > 0 ? `${products.length} 个商品` : '暂无商品'} trend={0} color="purple" />
       </div>
     </div>
   )
