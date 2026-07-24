@@ -669,12 +669,27 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
   })
   const days = dayKeys.map(k => new Date(k).getDate())
   const orderData = dayKeys.map(k => orders.filter(o => (o.date || '').slice(0, 10) === k).length)
-  // 上货趋势：按 analytics 行数生成
-  const uploadData = analytics?.rows?.length
-    ? dayKeys.map((_, i) => Math.min(100, Math.max(0, Math.round(analytics.rows.length * (1 - i / 30) * 0.5))))
-    : dayKeys.map(() => Math.floor(Math.random() * 100))
   const maxOrder = Math.max(...orderData, 1)
-  const maxUpload = Math.max(...uploadData, 1)
+
+  // ---- 新增可视化数据 ---
+  const dailyRevenue = dayKeys.map(k =>
+    orders.filter(o => (o.date || '').slice(0, 10) === k && o.status === 'delivered')
+      .reduce((s, o) => s + parseFloat(o.total || 0), 0))
+  const maxRevenue = Math.max(...dailyRevenue, 1)
+
+  const topSkus = (analytics?.rows || [])
+    .map(r => ({ sku: (r.dimensions || ['?'])[0], revenue: Number(r.metrics?.[0]) || 0, orders: Number(r.metrics?.[1]) || 0, units: Number(r.metrics?.[2]) || 0 }))
+    .sort((a, b) => b.revenue - a.revenue).slice(0, 5)
+  const maxSkuRevenue = Math.max(...topSkus.map(s => s.revenue), 1)
+
+  const statusColors = { pending: '#f59e0b', processing: '#3b82f6', shipped: '#8b5cf6', delivered: '#10b981', cancelled: '#ef4444', disputed: '#f97316' }
+  const statusLabels = { pending: '待处理', processing: '处理中', shipped: '运输中', delivered: '已签收', cancelled: '已取消', disputed: '有争议' }
+  const statusDist = ['pending', 'processing', 'shipped', 'delivered', 'cancelled', 'disputed']
+    .map(k => ({ key: k, label: statusLabels[k], count: orders.filter(o => o.status === k).length, color: statusColors[k] }))
+    .filter(d => d.count > 0)
+  const statusTotal = statusDist.reduce((s, d) => s + d.count, 0) || 1
+
+  const todayRevenueAmt = todayOrders.reduce((s, o) => s + parseFloat(o.total || 0), 0)
 
   // 真实数据时显示店铺信息
   const shopName = sellerInfo?.name || '布丁猫'
@@ -734,40 +749,123 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
           </div>
         </div>
 
-        {/* 上货趋势 */}
+        {/* Top 5 SKU 营收排行 */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-              30天上货趋势
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+              Top 5 SKU 营收排行
             </h3>
-            <span className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">{products.length} 个商品</span>
+            <span className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">{topSkus.length} 个SKU</span>
           </div>
-          <div className="h-48 flex items-end gap-[2px]">
-            {uploadData.map((v, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                <div className="w-full rounded-t cursor-pointer transition-all duration-150"
-                  style={{
-                    height: `${Math.max((v / maxUpload) * 100, v > 0 ? 2 : 0)}%`,
-                    minHeight: v > 0 ? '3px' : '0',
-                    background: v > 0 ? `linear-gradient(to top, #10b981, #34d399)` : 'transparent'
-                  }}
-                  title={`${dayKeys[i]}: ${v}件`} />
-              </div>
+          <div className="h-48 flex flex-col justify-center gap-[2px]">
+            {topSkus.length > 0 ? topSkus.map((s, i) => {
+              const pct = (s.revenue / maxSkuRevenue) * 100
+              const medals = ['🥇','🥈','🥉','','']
+              return (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="w-4 text-xs text-center">{medals[i] || `#${i+1}`}</span>
+                  <span className="w-24 text-[10px] text-gray-600 truncate" title={s.sku}>{s.sku}</span>
+                  <div className="flex-1 h-5 bg-gray-100 rounded-md overflow-hidden flex items-center">
+                    <div className="h-full bg-gradient-to-r from-amber-400 to-orange-400 rounded-md transition-all duration-500"
+                      style={{ width: `${pct}%`, minWidth: s.revenue > 0 ? '2px' : '0' }} />
+                  </div>
+                  <span className="w-20 text-right text-xs font-medium text-gray-700">
+                    {currency === 'CNY' ? `¥${s.revenue.toLocaleString()}` : `₽${s.revenue.toLocaleString()}`}
+                  </span>
+                  <span className="w-8 text-right text-[10px] text-gray-400">{s.units}件</span>
+                </div>
+              )
+            }) : (
+              <div className="text-center text-gray-400 text-xs">暂无销售数据（需先拉取订单或配置 API）</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 营收趋势 + 状态分布 */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* 营收趋势折线 */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-shadow">
+          <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+            30天营收趋势
+          </h3>
+          <svg viewBox="0 0 500 180" className="w-full h-44" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3" />
+                <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02" />
+              </linearGradient>
+            </defs>
+            <polyline fill="none" stroke="#3b82f6" strokeWidth="2"
+              points={dailyRevenue.map((v, i) =>
+                `${((i + 0.5) / dailyRevenue.length) * 500},${180 - (v / maxRevenue) * 160}`
+              ).join(' ')} />
+            <polygon fill="url(#revGrad)"
+              points={`0,180 ${dailyRevenue.map((v, i) =>
+                `${((i + 0.5) / dailyRevenue.length) * 500},${180 - (v / maxRevenue) * 160}`
+              ).join(' ')} 500,180`} />
+            {dailyRevenue.filter((_, i) => i % 7 === 0).map((v, i) => (
+              <text key={i} x={((i * 7 + 0.5) / dailyRevenue.length) * 500} y="176" textAnchor="middle"
+                className="fill-gray-400" fontSize="9">
+                {new Date(dayKeys[i * 7]).getDate()}日</text>
             ))}
-          </div>
-          <div className="flex justify-between mt-2 text-[10px] text-gray-400">
-            {days.filter((_, i) => i % 5 === 0).map(d => <span key={d} className="font-medium">{d}日</span>)}
+          </svg>
+        </div>
+        {/* 订单状态分布环图 */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-shadow">
+          <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
+            订单状态分布
+          </h3>
+          <div className="flex items-center justify-center gap-6">
+            <svg width="140" height="140" viewBox="0 0 140 140">
+              {(() => {
+                const segs = []
+                let prevOff = 0
+                const circ = 2 * Math.PI * 48
+                statusDist.forEach(d => {
+                  const pct = (d.count / statusTotal) * 100
+                  const dashLen = (pct / 100) * circ
+                  const gapLen = circ - dashLen
+                  segs.push(
+                    <circle key={d.key} cx="70" cy="70" r="48" fill="none"
+                      stroke={d.color} strokeWidth="22"
+                      strokeDasharray={`${dashLen} ${gapLen}`}
+                      strokeDashoffset={-prevOff}
+                      transform="rotate(-90 70 70)"
+                      className="transition-all duration-500"
+                      title={`${d.label}: ${d.count}单`} />
+                  )
+                  prevOff += dashLen
+                })
+                return segs
+              })()}
+              <circle cx="70" cy="70" r="36" fill="white" />
+              <text x="70" y="66" textAnchor="middle" className="fill-gray-800" fontSize="20" fontWeight="bold">{orders.length}</text>
+              <text x="70" y="82" textAnchor="middle" className="fill-gray-400" fontSize="10">总订单</text>
+            </svg>
+            <div className="space-y-1.5">
+              {statusDist.map(d => (
+                <div key={d.key} className="flex items-center gap-2 text-xs">
+                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: d.color }} />
+                  <span className="text-gray-600 w-14">{d.label}</span>
+                  <span className="text-gray-800 font-medium">{d.count}</span>
+                  <span className="text-gray-400">{((d.count / statusTotal) * 100).toFixed(0)}%</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
 
       {/* 快捷统计 */}
       <div className="grid grid-cols-4 gap-4">
-        <StatCard icon="orders" label="待处理订单" value={pendingOrders} trend={pendingOrders > 0 ? 1 : 0} color="yellow" />
-        <StatCard icon="cart" label="今日订单" value={todayOrders} trend={todayOrders > 0 ? 1 : 0} color="blue" />
-        <StatCard icon="money" label="30天收入" value={currency === 'CNY' ? `¥${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : `₽${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} trend={15} color="green" />
-        <StatCard icon="star" label="店铺评分" value={`${avgRating} ⭐`} trend={0} color="purple" />
+        <StatCard icon="orders" label="待处理订单" value={pendingOrders} sub={`${orders.filter(o => o.status === 'pending' || o.status === 'processing').length} 笔待处理`} trend={pendingOrders > 0 ? 1 : 0} color="yellow" />
+        <StatCard icon="cart" label={`今天 (${todayStr.slice(5)})`} value={todayOrders} sub={`营收 ¥${todayRevenueAmt.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} trend={todayOrders > 0 ? 1 : 0} color="blue" />
+        <StatCard icon="money" label="30天营收" value={currency === 'CNY' ? `¥${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : `₽${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sub={`${orders.length} 个订单`} trend={Math.round((todayRevenueAmt / Math.max(totalRevenue, 1)) * 100)} color="green" />
+        <StatCard icon="star" label="店铺评分" value={`${avgRating} ⭐`} sub={`${products.length} 个商品`} trend={0} color="purple" />
       </div>
     </div>
   )
@@ -2534,6 +2632,7 @@ const ShopManage = ({ sellerInfo, warehouses }) => {
 // ==================== 数据分析页面 ====================
 const AnalyticsPage = ({ analytics, orders }) => {
   const [tab, setTab] = useState('overview')
+  const [revTab, setRevTab] = useState('table')
   if (!analytics) {
     return (
       <div className="p-6 space-y-6 animate-slide-up">
@@ -2557,90 +2656,193 @@ const AnalyticsPage = ({ analytics, orders }) => {
   }
   const rows = analytics.rows || []
   const totalRev = analytics.totalRevenue || 0
-  const totalOrders = rows.length
-  const avgOrderValue = totalOrders > 0 ? totalRev / totalOrders : 0
+  const totalSkuCount = rows.length
+  const avgOrderValue = totalSkuCount > 0 ? totalRev / totalSkuCount : 0
   const currency = orders[0]?.currency || 'CNY'
   const fmt = (n) => currency === 'CNY' ? `¥${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : `₽${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+
+  // 从订单聚合日营收
+  const todayA = new Date()
+  const dayKeysA = Array.from({ length: 30 }, (_, i) => {
+    const d = new Date(todayA); d.setDate(d.getDate() - (29 - i)); return d.toISOString().slice(0, 10)
+  })
+  const dailyRevenueA = dayKeysA.map(k =>
+    orders.filter(o => (o.date || '').slice(0, 10) === k && o.status === 'delivered')
+      .reduce((s, o) => s + parseFloat(o.total || 0), 0))
+  const maxRevenueA = Math.max(...dailyRevenueA, 1)
+
+  const topSkusA = rows.map(r => ({
+    sku: (r.dimensions || ['?'])[0],
+    revenue: Number(r.metrics?.[0]) || 0,
+    orders: Number(r.metrics?.[1]) || 0,
+    units: Number(r.metrics?.[2]) || 0,
+    returns: Number(r.metrics?.[3]) || 0,
+  })).sort((a, b) => b.revenue - a.revenue)
+  const maxSkuRevA = Math.max(...topSkusA.map(s => s.revenue), 1)
+  const totalReturns = topSkusA.reduce((s, r) => s + r.returns, 0)
+  const totalUnits = topSkusA.reduce((s, r) => s + r.units, 0)
+  const returnRate = totalUnits > 0 ? ((totalReturns / totalUnits) * 100).toFixed(1) : '0.0'
+
+  const ChartTab = ({ v, setV, options, className = '' }) => (
+    <div className={`flex gap-2 border-b border-gray-200 ${className}`}>
+      {options.map(([k, l]) => (
+        <button key={k} onClick={() => setV(k)}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${v === k ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>{l}</button>
+      ))}
+    </div>
+  )
+
   return (
     <div className="p-6 space-y-6 animate-slide-up">
-      <h2 className="text-xl font-bold text-gray-800">数据分析</h2>
-      {/* 核心指标 */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-green-50 rounded-lg p-4">
-          <div className="text-sm font-medium text-green-700">30天总收入</div>
+      <h2 className="text-xl font-bold text-gray-800">📊 数据分析</h2>
+      {/* 核心统计卡 — 4 列 */}
+      <div className="grid grid-cols-4 gap-4">
+        <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
+          <div className="text-xs text-green-600 font-medium">30天总收入</div>
           <div className="text-2xl font-bold mt-1 text-green-700">{fmt(totalRev)}</div>
+          <div className="text-[11px] text-green-500 mt-1">{totalSkuCount} 个 SKU</div>
         </div>
-        <div className="bg-blue-50 rounded-lg p-4">
-          <div className="text-sm font-medium text-blue-700">有销售SKU数</div>
-          <div className="text-2xl font-bold mt-1 text-blue-700">{totalOrders}</div>
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-100">
+          <div className="text-xs text-blue-600 font-medium">平均客单价</div>
+          <div className="text-2xl font-bold mt-1 text-blue-700">{fmt(avgOrderValue)}</div>
+          <div className="text-[11px] text-blue-500 mt-1">{totalUnits} 件商品</div>
         </div>
-        <div className="bg-purple-50 rounded-lg p-4">
-          <div className="text-sm font-medium text-purple-700">平均客单价</div>
-          <div className="text-2xl font-bold mt-1 text-purple-700">{fmt(avgOrderValue)}</div>
+        <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-4 border border-orange-100">
+          <div className="text-xs text-orange-600 font-medium">退货数 / 退换率</div>
+          <div className="text-2xl font-bold mt-1 text-orange-700">{totalReturns} / {returnRate}%</div>
+          <div className="text-[11px] text-orange-500 mt-1">30 天汇总</div>
+        </div>
+        <div className="bg-gradient-to-br from-purple-50 to-violet-50 rounded-xl p-4 border border-purple-100">
+          <div className="text-xs text-purple-600 font-medium">TOP SKU 占比</div>
+          <div className="text-2xl font-bold mt-1 text-purple-700">{topSkusA.length > 0 ? ((topSkusA[0].revenue / (totalRev || 1)) * 100).toFixed(0) : 0}%</div>
+          <div className="text-[11px] text-purple-500 mt-1">第 1 名占总销量</div>
         </div>
       </div>
+
+      {/* 图表行：营收趋势 + TOP 5 水平条 */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* 营收趋势折线 */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+          <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+            30天营收趋势（已签收订单）
+          </h3>
+          <svg viewBox="0 0 500 160" className="w-full h-40" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="revGradA" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3" />
+                <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02" />
+              </linearGradient>
+            </defs>
+            <polyline fill="none" stroke="#3b82f6" strokeWidth="2"
+              points={dailyRevenueA.map((v, i) =>
+                `${((i + 0.5) / dailyRevenueA.length) * 500},${160 - (v / maxRevenueA) * 140}`
+              ).join(' ')} />
+            <polygon fill="url(#revGradA)"
+              points={`0,160 ${dailyRevenueA.map((v, i) =>
+                `${((i + 0.5) / dailyRevenueA.length) * 500},${160 - (v / maxRevenueA) * 140}`
+              ).join(' ')} 500,160`} />
+            {dailyRevenueA.filter((_, i) => i % 7 === 0).map((v, i) => (
+              <text key={i} x={((i * 7 + 0.5) / dailyRevenueA.length) * 500} y="156" textAnchor="middle" fill="#9ca3af" fontSize="9">
+                {new Date(dayKeysA[i * 7]).getDate()}日</text>
+            ))}
+          </svg>
+        </div>
+        {/* TOP 5 水平条 */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+          <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+            TOP 5 销售排行
+          </h3>
+          <div className="space-y-2.5">
+            {topSkusA.slice(0, 5).map((s, i) => {
+              const pct = (s.revenue / maxSkuRevA) * 100
+              const medals = ['🥇', '🥈', '🥉']
+              return (
+                <div key={i}>
+                  <div className="flex justify-between text-xs mb-0.5">
+                    <span className="text-gray-600 truncate max-w-[140px]">{medals[i] || `#${i+1}`} {s.sku}</span>
+                    <span className="text-gray-500">{fmt(s.revenue)} / {s.units}件</span>
+                  </div>
+                  <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-amber-400 to-orange-400 rounded-full transition-all duration-500"
+                      style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
       {/* Tab 切换 */}
-      <div className="flex gap-2 border-b border-gray-200">
-        {[['overview', '按SKU明细'], ['top', 'TOP销售']].map(([k, l]) => (
-          <button key={k} onClick={() => setTab(k)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === k ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-            {l}
-          </button>
-        ))}
-      </div>
+      <ChartTab v={tab} setV={setTab} options={[['overview', '按SKU明细'], ['top', 'TOP10排名']]} />
+
       {/* 明细表 */}
       {tab === 'overview' && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left text-gray-600 font-medium">SKU</th>
-                <th className="px-4 py-3 text-right text-gray-600 font-medium">销售额</th>
-                <th className="px-4 py-3 text-right text-gray-600 font-medium">订单数</th>
-                <th className="px-4 py-3 text-right text-gray-600 font-medium">销量</th>
+                <th className="px-3 py-3 text-left text-gray-600 font-medium">SKU</th>
+                <th className="px-3 py-3 text-right text-gray-600 font-medium">销售额</th>
+                <th className="px-3 py-3 text-right text-gray-600 font-medium">订单数</th>
+                <th className="px-3 py-3 text-right text-gray-600 font-medium">销量</th>
+                <th className="px-3 py-3 text-right text-gray-600 font-medium">退货</th>
+                <th className="px-3 py-3 text-right text-gray-600 font-medium">占比</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.slice(0, 50).map((row, i) => {
-                const [sku, ...rest] = row.dimensions || []
-                const [revenue, ordQty, units, returns] = row.metrics || []
-                return (
-                  <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-mono text-xs text-gray-700">{sku || <span className="text-gray-400">—</span>}</td>
-                    <td className="px-4 py-3 text-right text-green-700 font-medium">{fmt(Number(revenue) || 0)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{Number(ordQty) || 0}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{Number(units) || 0}</td>
-                  </tr>
-                )
-              })}
-              {rows.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400">暂无销售数据</td></tr>}
+              {topSkusA.slice(0, 50).map((s, i) => (
+                <tr key={i} className="hover:bg-gray-50">
+                  <td className="px-3 py-3 font-mono text-xs text-gray-700 max-w-[140px] truncate" title={s.sku}>{s.sku}</td>
+                  <td className="px-3 py-3 text-right text-green-700 font-medium">{fmt(s.revenue)}</td>
+                  <td className="px-3 py-3 text-right text-gray-700">{s.orders}</td>
+                  <td className="px-3 py-3 text-right text-gray-700">{s.units}</td>
+                  <td className="px-3 py-3 text-right text-gray-400">{s.returns}</td>
+                  <td className="px-3 py-3 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(s.revenue / (totalRev || 1)) * 100}%` }} />
+                      </div>
+                      <span className="text-[10px] text-gray-400 w-8 text-right">{((s.revenue / (totalRev || 1)) * 100).toFixed(0)}%</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {topSkusA.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">暂无销售数据</td></tr>}
             </tbody>
           </table>
         </div>
       )}
-      {/* TOP 销售 */}
+      {/* TOP 10 */}
       {tab === 'top' && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left text-gray-600 font-medium">排名</th>
-                <th className="px-4 py-3 text-left text-gray-600 font-medium">SKU</th>
-                <th className="px-4 py-3 text-right text-gray-600 font-medium">销售额</th>
-                <th className="px-4 py-3 text-right text-gray-600 font-medium">销量</th>
+                <th className="px-3 py-3 text-left text-gray-600 font-medium">#</th>
+                <th className="px-3 py-3 text-left text-gray-600 font-medium">SKU</th>
+                <th className="px-3 py-3 text-right text-gray-600 font-medium">销售额</th>
+                <th className="px-3 py-3 text-right text-gray-600 font-medium">销量</th>
+                <th className="px-3 py-3 text-right text-gray-600 font-medium">退货</th>
+                <th className="px-3 py-3 text-right text-gray-600 font-medium">退换率</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {rows.slice(0, 20).sort((a, b) => (Number(b.metrics?.[0]) || 0) - (Number(a.metrics?.[0]) || 0)).map((row, i) => {
-                const [sku] = row.dimensions || []
-                const [revenue,, units] = row.metrics || []
+              {topSkusA.slice(0, 10).map((s, i) => {
                 const medals = ['🥇', '🥈', '🥉']
+                const rt = s.units > 0 ? ((s.returns / s.units) * 100).toFixed(1) : '0.0'
                 return (
                   <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-center w-12">{medals[i] || `#${i + 1}`}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-700">{sku}</td>
-                    <td className="px-4 py-3 text-right text-green-700 font-medium">{fmt(Number(revenue) || 0)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{Number(units) || 0}</td>
+                    <td className="px-3 py-3 text-center w-10 text-lg">{medals[i] || `#${i + 1}`}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-gray-700 max-w-[150px] truncate" title={s.sku}>{s.sku}</td>
+                    <td className="px-3 py-3 text-right text-green-700 font-medium">{fmt(s.revenue)}</td>
+                    <td className="px-3 py-3 text-right text-gray-700">{s.units}</td>
+                    <td className="px-3 py-3 text-right text-gray-400">{s.returns}</td>
+                    <td className="px-3 py-3 text-right">
+                      <span className={`text-xs font-medium ${parseFloat(rt) > 10 ? 'text-red-500' : 'text-gray-500'}`}>{rt}%</span>
+                    </td>
                   </tr>
                 )
               })}
