@@ -371,15 +371,16 @@ const useLocalStorage = (key, initialValue) => {
 
 // ==================== 常量定义 ====================
 const statusMap = {
-  pending: { label: '待处理', color: 'bg-yellow-100 text-yellow-800', dot: 'bg-yellow-400' },
-  processing: { label: '处理中', color: 'bg-blue-100 text-blue-800', dot: 'bg-blue-400' },
-  shipped: { label: '已发货', color: 'bg-purple-100 text-purple-800', dot: 'bg-purple-400' },
-  delivered: { label: '已完成', color: 'bg-green-100 text-green-800', dot: 'bg-green-400' },
-  cancelled: { label: '已取消', color: 'bg-red-100 text-red-800', dot: 'bg-red-400' },
-  success: { label: '成功', color: 'bg-green-100 text-green-800', dot: 'bg-green-400' },
-  failed: { label: '失败', color: 'bg-red-100 text-red-800', dot: 'bg-red-400' },
-  active: { label: '进行中', color: 'bg-green-100 text-green-800', dot: 'bg-green-400' },
-  ended: { label: '已结束', color: 'bg-gray-100 text-gray-800', dot: 'bg-gray-400' },
+  pending:    { label: '等待备货',   color: 'bg-yellow-100 text-yellow-800',  dot: 'bg-yellow-400' },
+  processing: { label: '等待发货',   color: 'bg-blue-100 text-blue-800',    dot: 'bg-blue-400' },
+  shipped:    { label: '运输中',     color: 'bg-purple-100 text-purple-800', dot: 'bg-purple-400' },
+  delivered:  { label: '已签收',     color: 'bg-green-100 text-green-800',  dot: 'bg-green-400' },
+  cancelled:  { label: '已取消',     color: 'bg-red-100 text-red-800',     dot: 'bg-red-400' },
+  success:    { label: '成功',       color: 'bg-green-100 text-green-800',  dot: 'bg-green-400' },
+  failed:     { label: '失败',       color: 'bg-red-100 text-red-800',     dot: 'bg-red-400' },
+  active:     { label: '进行中',     color: 'bg-green-100 text-green-800',  dot: 'bg-green-400' },
+  ended:      { label: '已结束',     color: 'bg-gray-100 text-gray-800',    dot: 'bg-gray-400' },
+  disputed:   { label: '有争议',     color: 'bg-orange-100 text-orange-800', dot: 'bg-orange-400' },
 }
 
 // ==================== CSV 导出工具 ====================
@@ -1364,16 +1365,38 @@ const Promotions = ({ promotions }) => {
   )
 }
 
-// ==================== 订单管理页面 ====================
-const Orders = ({ orders, setOrders }) => {
+// ==================== 订单管理页面（7状态Tab + 自动拉取） ====================
+const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
-  const perPage = 10
+  const perPage = 15
+
+  // 7状态Tab统计（Ozon真实状态）
+  const counts = {
+    all: orders.length,
+    pending: orders.filter(o => ['pending', 'awaiting_packaging', 'awaiting_registration'].includes(o.ozonStatus)).length,
+    processing: orders.filter(o => ['processing', 'acceptance_in_progress'].includes(o.ozonStatus)).length,
+    shipped: orders.filter(o => ['shipped', 'delivering', 'awaiting_deliver'].includes(o.ozonStatus)).length,
+    delivered: orders.filter(o => o.ozonStatus === 'delivered').length,
+    disputed: orders.filter(o => ['dispute', 'disputed'].includes(o.ozonStatus)).length,
+    cancelled: orders.filter(o => ['cancelled', 'cancelling', 'not_accepted'].includes(o.ozonStatus)).length,
+  }
+
+  // 过滤逻辑：优先按ozonStatus分组，其次按innerStatus兜底
+  const ozonStatusGroup = {
+    all:       () => true,
+    pending:    o => ['pending','awaiting_packaging','awaiting_registration'].includes(o.ozonStatus),
+    processing: o => ['processing','acceptance_in_progress'].includes(o.ozonStatus),
+    shipped:    o => ['shipped','delivering','awaiting_deliver'].includes(o.ozonStatus),
+    delivered:  o => o.ozonStatus === 'delivered',
+    disputed:   o => ['dispute','disputed'].includes(o.ozonStatus),
+    cancelled:  o => ['cancelled','cancelling','not_accepted'].includes(o.ozonStatus),
+  }
 
   const filtered = orders.filter(o => {
-    if (filter !== 'all' && o.status !== filter) return false
-    if (search && !o.id.toLowerCase().includes(search.toLowerCase()) && !o.customer.includes(search)) return false
+    if (!ozonStatusGroup[filter]?.(o)) return false
+    if (search && !o.id.toLowerCase().includes(search.toLowerCase()) && !o.customer.includes(search) && !o.product.includes(search)) return false
     return true
   })
 
@@ -1383,8 +1406,12 @@ const Orders = ({ orders, setOrders }) => {
   const handleExport = (fmt) => {
     if (filtered.length === 0) { showToast('没有可导出的订单', 'warning'); return }
     const rows = filtered.map(o => ({
-      订单号: o.id, 客户: o.customer, 商品: o.product, 金额: o.total,
-      状态: (statusMap[o.status] && statusMap[o.status].label) || o.status, 时间: o.date, 地址: o.address, 物流单号: o.tracking,
+      订单号: o.id, 客户: o.customer, 商品: o.product, 件数: o.items,
+      金额: o.total + ' ' + (o.currency || '₽'),
+      状态: (statusMap[o.status] && statusMap[o.status].label) || o.status,
+      仓库配送: o.warehouse || o.deliveryMethod || '—',
+      物流单号: o.tracking, 备注: o.note || '',
+      下单时间: o.date,
     }))
     const name = `orders_export_${new Date().toISOString().slice(0, 10)}`
     if (fmt === 'excel') exportToExcel(rows, name + '.xls')
@@ -1392,111 +1419,160 @@ const Orders = ({ orders, setOrders }) => {
     showToast(`已导出 ${rows.length} 条订单（${fmt === 'excel' ? 'Excel' : 'CSV'}）`, 'success')
   }
 
-  const statusBadge = (s) => (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${statusMap[s]?.color}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${statusMap[s]?.dot}`} />
-      {statusMap[s]?.label}
+  const statusBadge = (o) => (
+    <span
+      title={o.ozonStatus ? `原始状态: ${o.ozonStatus}` : ''}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold cursor-default ${statusMap[o.status]?.color}`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${statusMap[o.status]?.dot}`} />
+      {statusMap[o.status]?.label}
     </span>
   )
 
-  const updateStatus = (id, newStatus) => {
-    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: newStatus } : o))
-  }
+  const tabList = [
+    { key: 'all',       label: '全部' },
+    { key: 'pending',   label: '等待备货' },
+    { key: 'processing',label: '等待发货' },
+    { key: 'shipped',  label: '运输中' },
+    { key: 'delivered',label: '已签收' },
+    { key: 'disputed', label: '有争议' },
+    { key: 'cancelled',label: '已取消' },
+  ]
 
   return (
     <div className="p-6 space-y-4 animate-slide-up">
-      <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          {['all', 'pending', 'processing', 'shipped', 'delivered', 'cancelled'].map(s => (
+      {/* 工具栏：状态Tab + 操作按钮 */}
+      <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200 space-y-3">
+        {/* 7状态Tab */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {tabList.map(t => (
             <button
-              key={s}
-              onClick={() => { setFilter(s); setPage(1) }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                filter === s
-                  ? 'bg-blue-600 text-white'
+              key={t.key}
+              onClick={() => { setFilter(t.key); setPage(1) }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
+                filter === t.key
+                  ? 'bg-blue-600 text-white shadow-sm'
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
             >
-              {s === 'all' ? '全部' : statusMap[s]?.label}
+              {t.label}
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                filter === t.key ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-500'
+              }`}>
+                {counts[t.key] ?? 0}
+              </span>
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              value={search}
-              onChange={e => { setSearch(e.target.value); setPage(1) }}
-              placeholder="搜索订单号或客户..."
-              className="pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg w-52 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+
+        {/* 搜索 + 拉取 + 导出 */}
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                value={search}
+                onChange={e => { setSearch(e.target.value); setPage(1) }}
+                placeholder="搜索订单号/客户/商品..."
+                className="pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg w-52 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => handleExport('csv')} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700">
+            <button
+              onClick={onRefresh}
+              disabled={isLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+            >
+              <Icon name="refresh" size={13} className={isLoading ? 'animate-spin' : ''} />
+              {isLoading ? '拉取中...' : '拉取新订单'}
+            </button>
+            <button
+              onClick={() => handleExport('csv')}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors"
+            >
               <Icon name="download" size={13} /> 导出CSV
             </button>
-            <button onClick={() => handleExport('excel')} className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-50">
+            <button
+              onClick={() => handleExport('excel')}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors"
+            >
               <Icon name="fileText" size={13} /> 导出Excel
             </button>
           </div>
         </div>
       </div>
 
+      {/* 订单表格 */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr className="text-gray-600">
-              <th className="text-left px-4 py-3 font-medium">订单号</th>
-              <th className="text-left px-4 py-3 font-medium">客户</th>
-              <th className="text-left px-4 py-3 font-medium">商品</th>
-              <th className="text-left px-4 py-3 font-medium">金额</th>
-              <th className="text-left px-4 py-3 font-medium">状态</th>
-              <th className="text-left px-4 py-3 font-medium">时间</th>
-              <th className="text-left px-4 py-3 font-medium">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paginated.map((o, i) => (
-              <tr key={i} className="border-t border-gray-100 hover:bg-gray-50">
-                <td className="px-4 py-3 font-mono text-blue-600">{o.id}</td>
-                <td className="px-4 py-3">{o.customer}</td>
-                <td className="px-4 py-3 text-gray-600">{o.product}</td>
-                <td className="px-4 py-3 font-bold">₽{parseFloat(o.total).toLocaleString()}</td>
-                <td className="px-4 py-3">{statusBadge(o.status)}</td>
-                <td className="px-4 py-3 text-gray-400 text-xs">{o.date}</td>
-                <td className="px-4 py-3">
-                  <select 
-                    value={o.status}
-                    onChange={(e) => updateStatus(o.id, e.target.value)}
-                    className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="pending">待处理</option>
-                    <option value="processing">处理中</option>
-                    <option value="shipped">已发货</option>
-                    <option value="delivered">已完成</option>
-                    <option value="cancelled">已取消</option>
-                  </select>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
-          <span className="text-xs text-gray-400">显示 {(page - 1) * perPage + 1}-{Math.min(page * perPage, filtered.length)} 条，共 {filtered.length} 条</span>
-          <div className="flex gap-1">
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-              className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40">上一页</button>
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => (
-              <button key={i} onClick={() => setPage(i + 1)}
-                className={`px-3 py-1 text-xs border rounded ${page === i + 1 ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 hover:bg-gray-50'}`}>
-                {i + 1}
-              </button>
-            ))}
-            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-              className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40">下一页</button>
+        {paginated.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+            <div className="text-5xl mb-4">📦</div>
+            <div className="text-sm font-medium">{filter === 'all' ? '暂无订单' : `暂无「${tabList.find(t => t.key === filter)?.label}」订单`}</div>
+            <div className="text-xs mt-1">点击右上角「拉取新订单」获取最新数据</div>
           </div>
-        </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr className="text-gray-500 text-xs">
+                <th className="text-left px-4 py-3 font-medium">订单号</th>
+                <th className="text-left px-4 py-3 font-medium">件数</th>
+                <th className="text-left px-4 py-3 font-medium">商品</th>
+                <th className="text-left px-4 py-3 font-medium">金额</th>
+                <th className="text-left px-4 py-3 font-medium">状态</th>
+                <th className="text-left px-4 py-3 font-medium">仓库/配送</th>
+                <th className="text-left px-4 py-3 font-medium">下单时间</th>
+                <th className="text-left px-4 py-3 font-medium">物流单号</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paginated.map((o, i) => (
+                <tr key={i} className="border-t border-gray-100 hover:bg-blue-50/40 transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="font-mono text-blue-600 text-xs">{o.id}</div>
+                    {o.note && <div className="text-[10px] text-orange-500 mt-0.5 truncate max-w-[120px]">{o.note}</div>}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <span className="bg-blue-50 text-blue-600 rounded px-2 py-0.5 text-xs font-bold">{o.items}</span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-600 text-xs max-w-[200px]">
+                    <div className="truncate" title={o.product}>{o.product}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="font-bold text-gray-800">
+                      {o.currency === 'CNY' ? '¥' : '₽'}{parseFloat(o.total).toLocaleString()}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">{statusBadge(o)}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">{o.warehouse || o.deliveryMethod || '—'}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{o.date}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-gray-500">{o.tracking !== '—' ? o.tracking : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {/* 分页 */}
+        {filtered.length > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">
+            <span className="text-xs text-gray-400">
+              显示 {(page - 1) * perPage + 1}-{Math.min(page * perPage, filtered.length)} 条，共 {filtered.length} 条
+            </span>
+            <div className="flex gap-1">
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+                className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-40">上一页</button>
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => (
+                <button key={i} onClick={() => setPage(i + 1)}
+                  className={`px-3 py-1 text-xs border rounded ${page === i + 1 ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 hover:bg-gray-100'}`}>
+                  {i + 1}
+                </button>
+              ))}
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+                className="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-40">下一页</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -2254,9 +2330,6 @@ export default function App() {
   const tabVisibleRef = useRef(true)
   const refreshFnRef = useRef()
 
-  // 保持 refresh 引用最新
-  useEffect(() => { refreshFnRef.current = refresh }, [refresh])
-
   // 页面可见性切换：切到后台暂停刷新
   useEffect(() => {
     const handler = () => { tabVisibleRef.current = !document.hidden }
@@ -2307,6 +2380,9 @@ export default function App() {
     }).finally(() => setLoading(false))
   }, [apiConfig])
 
+  // 保持 refresh 引用最新（必须在 refresh 定义之后）
+  useEffect(() => { refreshFnRef.current = refresh }, [refresh])
+
   useEffect(() => {
     if (apiConfig.clientId && apiConfig.apiKey) {
       refresh()
@@ -2323,7 +2399,7 @@ export default function App() {
     relist: <Relist products={products} setProducts={setProducts} />,
     inventory: <Inventory products={products} setProducts={setProducts} />,
     warehouse: <Warehouse warehouses={warehouses} />,
-    orders: <Orders orders={orders} setOrders={setOrders} />,
+    orders: <Orders orders={orders} setOrders={setOrders} onRefresh={refresh} isLoading={loading} />,
     logistics: <Logistics orders={orders} />,
     notifications: <Notifications notifications={[...reviews, ...notifications]} />,
     promotions: <Promotions promotions={promotions} />,

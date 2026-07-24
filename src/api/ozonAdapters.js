@@ -12,13 +12,19 @@ const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 const isoDate = (s) => (s ? String(s).slice(0, 10) : '')
 const deepGet = (obj, path) => path.split('.').reduce((o, k) => (o && o[k] != null ? o[k] : null), obj)
 
-// ---- 状态映射 ----
+// ---- 状态映射（兼容内部状态 + 保留原始Ozon状态）----
 const OZON_STATUS_MAP = {
-  delivered: 'delivered', cancelled: 'cancelled', cancelling: 'cancelled',
-  delivering: 'shipped', awaiting_packaging: 'processing',
-  acceptance_in_progress: 'processing', awaiting_deliver: 'shipped',
-  awaiting_registration: 'pending', not_accepted: 'pending',
-  pending: 'pending', awaiting: 'pending',
+  delivered:             'delivered',   // 已签收
+  cancelled:             'cancelled',   // 已取消
+  cancelling:            'cancelled',   // 取消中
+  delivering:            'shipped',     // 运输中
+  awaiting_packaging:    'pending',     // 等待备货
+  acceptance_in_progress:'processing', // 等待发货
+  awaiting_deliver:      'shipped',     // 等待发货
+  awaiting_registration: 'pending',     // 等待登记
+  not_accepted:          'cancelled',   // 未接单
+  pending:               'pending',
+  awaiting:              'pending',
 }
 const mapOzonStatus = (s) => OZON_STATUS_MAP[s] || 'pending'
 
@@ -54,21 +60,25 @@ export const adaptSellerInfo = (raw) => {
 export const adaptOrders = (postings = []) => postings.map(p => {
   const prods = p.products || []
   const total = prods.reduce((s, x) => s + num(x.price) * num(x.quantity), 0)
+  const innerStatus = mapOzonStatus(p.status)
   return {
-    id:        p.posting_number || p.order_number || '',
-    orderId:   p.order_id || '',
-    customer:  'Ozon 买家',    // FBO 无买家详情
-    product:   prods.map(pr => `${pr.name || '商品'} x${pr.quantity || 1}`).join('，') || '—',
-    items:     prods.reduce((s, x) => s + num(x.quantity), 0),
+    id:          p.posting_number || p.order_number || '',
+    orderId:     p.order_id || '',
+    customer:    'Ozon 买家',
+    product:     prods.map(pr => `${pr.name || '商品'} x${pr.quantity || 1}`).join('，') || '—',
+    items:       prods.reduce((s, x) => s + num(x.quantity), 0),
     total,
-    currency:  prods[0]?.currency_code || 'CNY',
-    status:    mapOzonStatus(p.status),
-    date:      isoDate(p.created_at),
-    address:   'Ozon 配送',
-    phone:     '—',
-    tracking:  p.tracking_number || '—',
-    note:      p.substatus ? `子状态: ${p.substatus}` : '',
+    currency:    prods[0]?.currency_code || 'CNY',
+    status:      innerStatus,
+    ozonStatus:  p.status || '',       // 保留原始Ozon状态用于Tab分组
+    date:        isoDate(p.created_at),
+    address:     'Ozon 配送',
+    phone:       '—',
+    tracking:    p.tracking_number || '—',
+    note:        p.substatus ? `子状态: ${p.substatus}` : '',
     cancelReasonId: p.cancel_reason_id || 0,
+    warehouse:   p.warehouse_id || '',
+    deliveryMethod: p.delivery_method || '',
   }
 })
 
