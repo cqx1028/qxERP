@@ -19,6 +19,16 @@ npm run dev
 npm run build
 ```
 
+### 部署到 GitHub Pages（推荐）
+```
+双击 deploy.bat
+```
+会自动完成：构建 → 把 dist 铺平到 gh-pages 分支 → 强制推送 → 1-2 分钟后访问 https://cqx1028.github.io/qxERP/
+
+> GitHub Pages 配置：Settings → Pages → Branch: `gh-pages` / (root)。如果 Pages 显示 404，请重新点一次 Save。
+>
+> 脚本会调用 `deploy.cjs`（Node 实现），需要先装 Node.js。Git 推送时如弹出 GitHub 登录窗口，输入 PAT 作为密码即可。
+
 ## 📁 项目结构
 
 ```
@@ -56,6 +66,8 @@ ozon-erp/
 ├── vite.config.js       # Vite 配置
 ├── start.bat            # Windows 启动脚本
 ├── build.bat            # Windows 构建脚本
+├── deploy.bat           # Windows 部署脚本（双击推到 GitHub Pages）
+├── deploy.cjs           # 部署脚本实现（避免 cmd 编码坑）
 └── package.json         # 项目依赖
 ```
 
