@@ -2050,70 +2050,265 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
 }
 
 // ==================== 商品管理页面 ====================
-const Products = ({ products, setProducts }) => {
-  const [search, setSearch] = useState('')
-  const [sortBy, setSortBy] = useState('sold')
-  const [showAddModal, setShowAddModal] = useState(false)
+// 商品状态映射
+const PRODUCT_STATUS_MAP = {
+  active:      { key: 'active',      label: '在售',       color: 'bg-green-100 text-green-700' },
+  inactive:    { key: 'inactive',    label: '已下架',     color: 'bg-gray-100 text-gray-600' },
+  price_sent:  { key: 'price_sent',  label: '价格错误',   color: 'bg-red-100 text-red-700' },
+  moderating:  { key: 'moderating',  label: '审核中',     color: 'bg-yellow-100 text-yellow-700' },
+  failed:      { key: 'failed',      label: '创建失败',   color: 'bg-red-100 text-red-700' },
+}
 
-  const filtered = products
-    .filter(p => !search || p.name.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => b[sortBy] - a[sortBy])
+const Products = ({ products, setProducts }) => {
+  const [searchName, setSearchName] = useState('')
+  const [searchSku, setSearchSku] = useState('')
+  const [statusTab, setStatusTab] = useState('all')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [sortField, setSortField] = useState('price')
+  const [sortDir, setSortDir] = useState('desc')
+  const [selected, setSelected] = useState(new Set())
+
+  // 状态分组计数
+  const tabs = [
+    { key: 'all',       label: '所有' },
+    { key: 'active',    label: '在售' },
+    { key: 'inactive',  label: '已下架' },
+    { key: 'price_sent',label: '价格错误' },
+    { key: 'moderating',label: '审核中' },
+    { key: 'archived',  label: '已归档' },
+  ]
+  const counts = (key) => {
+    if (key === 'all') return products.length
+    if (key === 'archived') return products.filter(p => p.archived).length
+    if (key === 'inactive') return products.filter(p => p.status === 'inactive' || p.archived).length
+    return products.filter(p => p.status === key).length
+  }
+
+  // 过滤
+  const filtered = products.filter(p => {
+    if (searchName && !p.name.toLowerCase().includes(searchName.toLowerCase())) return false
+    if (searchSku && !(p.sku || p.offer_id || '').toLowerCase().includes(searchSku.toLowerCase())) return false
+    if (statusTab === 'all') return true
+    if (statusTab === 'archived') return p.archived
+    if (statusTab === 'inactive') return p.status === 'inactive' || p.archived
+    return p.status === statusTab
+  })
+
+  // 排序
+  filtered.sort((a, b) => {
+    const av = Number(a[sortField]) || 0
+    const bv = Number(b[sortField]) || 0
+    return sortDir === 'desc' ? bv - av : av - bv
+  })
+
+  // 分页
+  const total = filtered.length
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const paginated = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
+
+  const toggleSort = (f) => {
+    if (sortField === f) setSortDir(sortDir === 'desc' ? 'asc' : 'desc')
+    else { setSortField(f); setSortDir('desc') }
+  }
+
+  const toggleSelect = (id) => {
+    const s = new Set(selected)
+    s.has(id) ? s.delete(id) : s.add(id)
+    setSelected(s)
+  }
+  const toggleSelectAll = () => {
+    if (paginated.every(p => selected.has(p.id))) {
+      const s = new Set(selected)
+      paginated.forEach(p => s.delete(p.id))
+      setSelected(s)
+    } else {
+      const s = new Set(selected)
+      paginated.forEach(p => s.add(p.id))
+      setSelected(s)
+    }
+  }
+
+  const SortHeader = ({ field, children }) => (
+    <button onClick={() => toggleSort(field)} className="inline-flex items-center gap-1 hover:text-blue-600">
+      {children}
+      <span className="text-gray-300">
+        {sortField === field ? (sortDir === 'desc' ? '↓' : '↑') : '⇅'}
+      </span>
+    </button>
+  )
 
   return (
     <div className="p-6 space-y-4 animate-slide-up">
-      <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索商品..."
-              className="pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg w-56 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-            className="text-xs border border-gray-300 rounded-lg px-3 py-1.5 bg-gray-50 focus:outline-none">
-            <option value="sold">按销量排序</option>
-            <option value="stock">按库存排序</option>
-            <option value="rating">按评分排序</option>
-            <option value="price">按价格排序</option>
+      {/* 顶部工具栏 */}
+      <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
+        <div className="flex flex-wrap items-center gap-3">
+          <select className="text-xs border border-gray-300 rounded-lg px-3 py-1.5 bg-gray-50 focus:outline-none min-w-[120px]">
+            <option>全部店铺</option>
           </select>
+          <div className="relative">
+            <Icon name="search" size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input value={searchName} onChange={e => { setSearchName(e.target.value); setPage(1) }} placeholder="商品名称"
+              className="pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg w-44 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <input value={searchSku} onChange={e => { setSearchSku(e.target.value); setPage(1) }} placeholder="货号/SKU"
+            className="text-xs border border-gray-300 rounded-lg px-3 py-1.5 w-32 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <button className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 flex items-center gap-1.5">
+            <Icon name="search" size={12} /> 查询
+          </button>
+          <button className="px-3 py-1.5 border border-blue-400 text-blue-600 rounded-lg text-xs hover:bg-blue-50 flex items-center gap-1.5">
+            <Icon name="refresh" size={12} /> 同步所选商品
+          </button>
+          <button className="px-3 py-1.5 border border-orange-400 text-orange-600 rounded-lg text-xs hover:bg-orange-50 flex items-center gap-1.5">
+            <Icon name="refresh" size={12} /> 同步所有商品
+          </button>
+          <div className="ml-auto relative">
+            <button className="px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg text-xs hover:bg-gray-50 flex items-center gap-1.5">
+              <Icon name="package" size={12} /> 批量操作
+              <span className="text-[10px]">▾</span>
+            </button>
+          </div>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700">
-          <Icon name="plus" size={13} /> 添加商品
-        </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        {filtered.map(p => (
-          <div key={p.id} className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
-            <div className="flex gap-3">
-              <div className="w-14 h-14 bg-gray-50 rounded-lg flex items-center justify-center text-2xl overflow-hidden">
-                {p.image && p.image.startsWith('http') ? (
-                  <img src={p.image} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <span>{p.image || '📦'}</span>
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-800">{p.name}</div>
-                    <div className="text-[11px] text-gray-400">{p.sku}</div>
-                  </div>
-                  <span className={`px-2 py-0.5 rounded text-[10px] ${p.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                    {p.status === 'active' ? '在售' : '下架'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-sm font-bold text-blue-600">₽{p.price.toLocaleString()}</span>
-                  <div className="flex items-center gap-3 text-[11px] text-gray-400">
-                    <span>📦 {p.stock}</span>
-                    <span>💰 {p.sold}</span>
-                    <span>⭐ {p.rating}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+      {/* 状态标签页 */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="flex border-b border-gray-200 overflow-x-auto">
+          {tabs.map(t => {
+            const c = counts(t.key)
+            return (
+              <button key={t.key} onClick={() => { setStatusTab(t.key); setPage(1) }}
+                className={`px-5 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors flex items-center gap-1.5 ${statusTab === t.key ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-600 hover:text-gray-900'}`}>
+                {t.label}
+                <span className={`text-xs px-1.5 py-0.5 rounded-full ${statusTab === t.key ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-500'}`}>
+                  {c}
+                </span>
+              </button>
+            )
+          })}
+          <div className="ml-auto px-4 py-3 flex items-center text-xs text-blue-600 hover:underline cursor-pointer">
+            开启自动同步 ?
           </div>
-        ))}
+        </div>
+
+        {/* 表格 */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr className="text-gray-600 text-xs">
+                <th className="px-3 py-3 w-8">
+                  <input type="checkbox"
+                    checked={paginated.length > 0 && paginated.every(p => selected.has(p.id))}
+                    onChange={toggleSelectAll}
+                    className="rounded" />
+                </th>
+                <th className="text-left px-4 py-3"><SortHeader field="name">商品信息</SortHeader></th>
+                <th className="text-left px-4 py-3">类目/佣金</th>
+                <th className="text-left px-4 py-3">店铺</th>
+                <th className="text-left px-4 py-3">状态</th>
+                <th className="text-left px-4 py-3"><SortHeader field="price">价格</SortHeader></th>
+                <th className="text-left px-4 py-3"><SortHeader field="stock">库存</SortHeader></th>
+                <th className="text-right px-4 py-3">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paginated.length === 0 ? (
+                <tr>
+                  <td colSpan="8" className="px-4 py-20 text-center">
+                    <div className="text-6xl mb-3">📭</div>
+                    <div className="text-gray-400 text-sm">暂无数据</div>
+                    <div className="text-gray-300 text-xs mt-1">尝试调整筛选条件或同步商品</div>
+                  </td>
+                </tr>
+              ) : paginated.map(p => {
+                const statusInfo = PRODUCT_STATUS_MAP[p.status] || PRODUCT_STATUS_MAP.inactive
+                const sku = p.sku || p.offer_id || '—'
+                return (
+                  <tr key={p.id} className="border-t border-gray-100 hover:bg-blue-50/30 transition-colors">
+                    <td className="px-3 py-3">
+                      <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} className="rounded" />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-3 items-center">
+                        <div className="w-12 h-12 bg-gray-50 rounded-lg flex items-center justify-center text-xl overflow-hidden flex-shrink-0 border border-gray-200">
+                          {p.image && p.image.startsWith('http') ? (
+                            <img src={p.image} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <span>📦</span>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-gray-800 line-clamp-1" title={p.name}>{p.name || '—'}</div>
+                          <div className="text-[11px] text-gray-400 mt-0.5">SKU: {sku}</div>
+                          <div className="text-[10px] text-gray-300 mt-0.5">ID: {p.id}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="text-xs text-gray-600">{p.categoryName || `类目 ${p.categoryId || '—'}`}</div>
+                      <div className="text-[10px] text-gray-400 mt-0.5">
+                        FBO {p.commissionFBO || 0}% / FBS {p.commissionFBS || 0}%
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-600">主店铺</td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${statusInfo.color}`}>
+                        {statusInfo.label}
+                      </span>
+                      {p.moderateStatus && p.moderateStatus !== 'approved' && (
+                        <div className="text-[10px] text-orange-500 mt-1">{p.moderateStatus}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="text-sm font-bold text-blue-600">₽{Number(p.price || 0).toLocaleString()}</div>
+                      {p.oldPrice && p.oldPrice > p.price && (
+                        <div className="text-[10px] text-gray-400 line-through">₽{Number(p.oldPrice).toLocaleString()}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`font-medium text-sm ${(p.stock || 0) < 15 ? 'text-red-600' : (p.stock || 0) < 30 ? 'text-yellow-600' : 'text-gray-800'}`}>
+                        {p.stock || 0}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end gap-1.5">
+                        <button title="查看详情" className="p-1.5 hover:bg-blue-50 text-blue-600 rounded">
+                          <Icon name="eye" size={14} />
+                        </button>
+                        <button title="编辑" className="p-1.5 hover:bg-gray-100 text-gray-600 rounded">
+                          <Icon name="edit" size={14} />
+                        </button>
+                        <button title="更多" className="p-1.5 hover:bg-gray-100 text-gray-600 rounded">
+                          <span className="text-xs leading-none">⋯</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* 分页 */}
+        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 text-xs text-gray-600">
+          <div className="flex items-center gap-3">
+            <span>共 <span className="font-semibold text-gray-800">{total}</span> 条记录</span>
+            <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1) }}
+              className="border border-gray-300 rounded px-2 py-1 bg-white">
+              {[10, 20, 50, 100].map(n => <option key={n} value={n}>{n}条/页</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPage(1)} disabled={safePage === 1} className="px-2 py-1 border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40">«</button>
+            <button onClick={() => setPage(Math.max(1, safePage - 1))} disabled={safePage === 1} className="px-2 py-1 border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40">‹</button>
+            <span className="px-3 py-1 bg-blue-600 text-white rounded font-medium">{safePage}</span>
+            <span className="text-gray-400">/ {totalPages}</span>
+            <button onClick={() => setPage(Math.min(totalPages, safePage + 1))} disabled={safePage === totalPages} className="px-2 py-1 border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40">›</button>
+            <button onClick={() => setPage(totalPages)} disabled={safePage === totalPages} className="px-2 py-1 border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40">»</button>
+          </div>
+        </div>
       </div>
     </div>
   )
