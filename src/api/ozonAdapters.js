@@ -91,7 +91,9 @@ export const adaptOrders = (postings = []) => postings.map(p => {
     cancelReasonId: p.cancel_reason_id || 0,
     cancelReason:   p.cancel_reason || '',
     warehouse:   p.warehouse_id || '',
-    deliveryMethod: p.delivery_method || '',
+    deliveryMethod: (p.delivery_method && typeof p.delivery_method === 'object')
+      ? (p.delivery_method.name || p.delivery_method.tpl_provider || JSON.stringify(p.delivery_method))
+      : (p.delivery_method || ''),
     // 原始 payload，供调试/详情展示
     _raw:        p,
   }
