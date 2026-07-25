@@ -656,7 +656,8 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
 
   const pendingOrders = orders.filter(o => o.status === 'pending' || o.status === 'processing').length
   const todayStr = new Date().toISOString().slice(0, 10)
-  const todayOrders = orders.filter(o => (o.date || '').startsWith(todayStr)).length
+  const todayOrdersArr = orders.filter(o => (o.date || '').startsWith(todayStr))
+  const todayOrders = todayOrdersArr.length
   // 从 analytics 取 30 天总收入；否则从已签收订单算
   const totalRevenue = analytics?.totalRevenue
     || orders.filter(o => o.status === 'delivered').reduce((s, o) => s + parseFloat(o.total || 0), 0)
@@ -691,7 +692,7 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
     .filter(d => d.count > 0)
   const statusTotal = statusDist.reduce((s, d) => s + d.count, 0) || 1
 
-  const todayRevenueAmt = todayOrders.reduce((s, o) => s + parseFloat(o.total || 0), 0)
+  const todayRevenueAmt = todayOrdersArr.reduce((s, o) => s + parseFloat(o.total || 0), 0)
 
   // 真实数据标记
   const hasRealData = orders.length > 0 || products.length > 0 || sellerInfo || analytics
@@ -889,7 +890,7 @@ const Dashboard = ({ orders, products, sellerInfo, analytics }) => {
       {/* 快捷统计 */}
       <div className="grid grid-cols-4 gap-4">
         <StatCard icon="orders" label="待处理订单" value={pendingOrders} sub={orders.length > 0 ? `${orders.filter(o => o.status === 'pending' || o.status === 'processing').length} 笔待处理` : '暂无订单'} trend={pendingOrders > 0 ? 1 : 0} color="yellow" />
-        <StatCard icon="cart" label={`今天 (${todayStr.slice(5)})`} value={todayOrders.length} sub={todayOrders.length > 0 ? `营收 ${currency === 'CNY' ? '¥' : '₽'}${todayRevenueAmt.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '暂无订单'} trend={todayOrders.length > 0 ? 1 : 0} color="blue" />
+        <StatCard icon="cart" label={`今天 (${todayStr.slice(5)})`} value={todayOrders} sub={todayOrders > 0 ? `营收 ${currency === 'CNY' ? '¥' : '₽'}${todayRevenueAmt.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '暂无订单'} trend={todayOrders > 0 ? 1 : 0} color="blue" />
         <StatCard icon="money" label="30天营收" value={currency === 'CNY' ? `¥${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : `₽${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sub={orders.length > 0 ? `${orders.length} 个订单` : '暂无已签收订单'} trend={totalRevenue > 0 ? Math.round((todayRevenueAmt / Math.max(totalRevenue, 1)) * 100) : 0} color="green" />
         <StatCard icon="star" label="店铺评分" value={avgRating ? `${avgRating} ⭐` : '—'} sub={products.length > 0 ? `${products.length} 个商品` : '暂无商品'} trend={0} color="purple" />
       </div>
