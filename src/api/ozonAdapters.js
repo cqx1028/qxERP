@@ -204,13 +204,21 @@ export const adaptAnalytics = (raw = {}) => {
   return {
     totalRevenue: num(totals[0]) || 0,
     rows: data.map(row => {
-      // dimensions 可能是字符串或数组
+      // dimensions 可能是字符串、字符串数组、或对象数组 {id, name}
       let dims = row.dimensions
       if (typeof dims === 'string') {
         dims = [dims]
       } else if (!Array.isArray(dims)) {
         dims = []
       }
+      // 进一步标准化：每个元素如果是对象 {id, name}，提取 name
+      dims = dims.map(d => {
+        if (d === null || d === undefined) return '?'
+        if (typeof d === 'object') {
+          return d.name || d.id || String(d)
+        }
+        return String(d)
+      })
       return {
         dimensions: dims,
         metrics:   row.metrics || [],
