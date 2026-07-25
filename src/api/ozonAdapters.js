@@ -2,7 +2,7 @@
 // Ozon API 响应适配器 - 全面实测版（2026-07-23）
 // 所有适配函数均基于实际 API 响应结构编写
 import {
-  getOrders, getProducts, getProductDetails, getProductStocks,
+  getOrders, getOrdersFBS, getProducts, getProductDetails, getProductStocks,
   getWarehouses, getSellerInfo, getAnalytics, getCategories,
   getReviews,
 } from './ozonApi'
@@ -55,8 +55,9 @@ export const adaptSellerInfo = (raw) => {
   }
 }
 
-// ---- 订单适配器（v2/posting/fbo/list） ----
-// 实测：result 直接是数组
+// ---- 订单适配器（FBO + FBS 统一） ----
+// FBO: result 直接是数组
+// FBS: result.postings 是数组
 export const adaptOrders = (postings = []) => postings.map(p => {
   const prods = p.products || []
   const total = prods.reduce((s, x) => s + num(x.price) * num(x.quantity), 0)
@@ -288,11 +289,26 @@ export const loadRealData = async () => {
   if (warehousesRes.status === 'fulfilled') results.warehouses = adaptWarehouses(warehousesRes.value)
   if (categoriesRes.status === 'fulfilled') results.categories = adaptCategories(categoriesRes.value)
 
-  // 订单（FBO，无需额外参数）
+  // 订单（FBO + FBS 合并）
   try {
-    const ordersRes = await getOrders()
-    const list = Array.isArray(ordersRes) ? ordersRes : deepGet(ordersRes, 'result') || []
-    results.orders = adaptOrders(list)
+    const [fboRes, fbsRes] = await Promise.allSettled([getOrders(), getOrdersFBS()])
+    const fboList = fboRes.status === 'fulfilled'
+      ? (Array.isArray(fboRes.value) ? fboRes.value : deepGet(fboRes.value, 'result') || [])
+      : []
+    const fbsList = fbsRes.status === 'fulfilled'
+      ? (deepGet(fbsRes.value, 'result.postings') || [])
+      : []
+    // 合并并去重（按 posting_number）
+    const merged = [...fboList, ...fbsList]
+    const seen = new Set()
+    const unique = merged.filter(o => {
+      const id = o.posting_number || o.order_number
+      if (seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+    results.orders = adaptOrders(unique)
+    console.log(`[ERP] 订单加载: FBO=${fboList.length}, FBS=${fbsList.length}, 合并后=${unique.length}`)
   } catch (e) { console.warn('[ERP] 订单加载失败:', e.message) }
 
   // 商品列表（v3，无名称）

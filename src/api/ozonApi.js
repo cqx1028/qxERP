@@ -3,8 +3,10 @@
 const OZON_API_BASE = 'https://api-seller.ozon.ru'
 
 export const OZON_ENDPOINTS = {
-  // 订单
+  // 订单 - FBO (Ozon仓储发货)
   ordersFBO:      '/v2/posting/fbo/list',
+  // 订单 - FBS (卖家自发货) - 这才是用户现在的主力模式
+  ordersFBS:      '/v3/posting/fbs/list',
   // 商品
   productList:    '/v3/product/list',       // ✅ 实测成功
   productInfoList: '/v3/product/info/list',  // ✅ 实测成功
@@ -26,6 +28,10 @@ export const OZON_ENDPOINTS = {
   cancelFBO:       '/v2/posting/fbo/cancel',
   // 状态历史（FBO）
   statusHistoryFBO: '/v3/posting/fbo/status-history',
+  // 取消订单（FBS）
+  cancelFBS:       '/v4/posting/fbs/cancel',
+  // 状态历史（FBS）
+  statusHistoryFBS: '/v1/posting/fbs/status-history',
 }
 
 const getCredentials = () => {
@@ -53,6 +59,21 @@ export const ozonRequest = async (endpoint, body = {}, options = {}) => {
 /** FBO 订单列表：result 直接是数组 */
 export const getOrders = (params = {}) =>
   ozonRequest(OZON_ENDPOINTS.ordersFBO, { limit: 50, offset: 0, ...params })
+
+// ---- 订单（FBS） ----
+/** FBS 订单列表：返回 { result: { postings: [...] } } */
+export const getOrdersFBS = (params = {}) => {
+  const to = new Date().toISOString()
+  const from = new Date(Date.now() - 30 * 86400000).toISOString()
+  return ozonRequest(OZON_ENDPOINTS.ordersFBS, {
+    dir: 'ASC',
+    filter: { since: from, to: to },
+    limit: 50,
+    offset: 0,
+    with: { analytics_data: true, barcodes: true, financial_data: true, translit: true },
+    ...params,
+  })
+}
 
 // ---- 商品列表 ----
 /** v3/product/list：返回 { result: { items: [...] } } */
