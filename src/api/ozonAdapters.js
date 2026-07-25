@@ -299,14 +299,19 @@ export const loadRealData = async () => {
   if (warehousesRes.status === 'fulfilled') results.warehouses = adaptWarehouses(warehousesRes.value)
   if (categoriesRes.status === 'fulfilled') results.categories = adaptCategories(categoriesRes.value)
 
-  // 订单（FBO + FBS 合并）
+  // 订单（默认只拉 FBS；通过 localStorage 'orderMode' 可选 'fbs' | 'fbo' | 'both'，默认 'fbs'）
+  const orderMode = (() => { try { return localStorage.getItem('orderMode') || 'fbs' } catch { return 'fbs' } })()
   try {
-    const [fboRes, fbsRes] = await Promise.allSettled([getOrders(), getOrdersFBS()])
-    const fboList = fboRes.status === 'fulfilled'
-      ? (Array.isArray(fboRes.value) ? fboRes.value : deepGet(fboRes.value, 'result') || [])
+    const calls = []
+    if (orderMode === 'fbo' || orderMode === 'both') calls.push(getOrders())
+    if (orderMode === 'fbs' || orderMode === 'both') calls.push(getOrdersFBS())
+    const settled = await Promise.allSettled(calls)
+    const fboList = (orderMode !== 'fbs' && settled[0]?.status === 'fulfilled')
+      ? (Array.isArray(settled[0].value) ? settled[0].value : deepGet(settled[0].value, 'result') || [])
       : []
-    const fbsList = fbsRes.status === 'fulfilled'
-      ? (deepGet(fbsRes.value, 'result.postings') || [])
+    const fbsSettledIdx = orderMode === 'fbo' ? 1 : 0
+    const fbsList = settled[fbsSettledIdx]?.status === 'fulfilled'
+      ? (deepGet(settled[fbsSettledIdx].value, 'result.postings') || [])
       : []
     // 合并并去重（按 posting_number）
     const merged = [...fboList, ...fbsList]
@@ -318,7 +323,7 @@ export const loadRealData = async () => {
       return true
     })
     results.orders = adaptOrders(unique)
-    console.log(`[ERP] 订单加载: FBO=${fboList.length}, FBS=${fbsList.length}, 合并后=${unique.length}`)
+    console.log(`[ERP] 订单加载: mode=${orderMode}, FBO=${fboList.length}, FBS=${fbsList.length}, 合并后=${unique.length}`)
   } catch (e) { console.warn('[ERP] 订单加载失败:', e.message) }
 
   // 商品列表（v3，无名称）

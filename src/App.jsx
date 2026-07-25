@@ -2183,6 +2183,33 @@ const Inventory = ({ products, setProducts }) => {
   )
 }
 
+// ==================== 订单模式选择器 ====================
+const OrderModeSelector = () => {
+  const [mode, setMode] = useLocalStorage('orderMode', 'fbs')
+  const opts = [
+    { value: 'fbs', label: '仅 FBS', desc: '卖家自发货（默认）' },
+    { value: 'fbo', label: '仅 FBO', desc: 'Ozon 仓储发货' },
+    { value: 'both', label: '全部', desc: 'FBS + FBO 合并' },
+  ]
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {opts.map(o => (
+        <button key={o.value} onClick={() => setMode(o.value)}
+          className={`p-3 rounded-lg border text-left transition-all ${
+            mode === o.value
+              ? 'bg-blue-50 border-blue-500 ring-2 ring-blue-200'
+              : 'border-gray-200 hover:bg-gray-50'
+          }`}>
+          <div className={`text-sm font-semibold ${mode === o.value ? 'text-blue-700' : 'text-gray-700'}`}>
+            {o.label}
+          </div>
+          <div className="text-[10px] text-gray-500 mt-0.5">{o.desc}</div>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 // ==================== 系统设置页面 ====================
 const Settings = ({ apiConfig, setApiConfig, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) => {
   const [testing, setTesting] = useState(false)
@@ -2262,6 +2289,12 @@ const Settings = ({ apiConfig, setApiConfig, autoRefresh, setAutoRefresh, refres
           </button>
         </div>
         <p className="text-xs text-gray-400">密钥仅保存在本地浏览器（localStorage），不会上传到任何服务器。</p>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 space-y-3">
+        <h3 className="text-sm font-semibold text-gray-800">订单模式</h3>
+        <p className="text-xs text-gray-500">选择需要拉取的订单类型（默认 FBS，适合卖家自发货）</p>
+        <OrderModeSelector />
       </div>
 
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 space-y-3">
