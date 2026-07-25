@@ -5,6 +5,7 @@ import {
   getOrders, getOrdersFBS, getProducts, getProductDetails, getProductStocks,
   getWarehouses, getSellerInfo, getAnalytics, getCategories,
   getReviews,
+  fetchAllProducts,
 } from './ozonApi'
 
 // ---- 工具函数 ----
@@ -111,17 +112,38 @@ export const adaptProductList = (items = []) => items.map(it => ({
   has_fbo:    it.has_fbo_stocks || false,
 }))
 
+// 商品状态映射（Ozon statuses.status → 应用层语义）
+// price_sent=已上传价格待生效, processed=可销售, moderate_failed=审核失败, archived=已归档
+const OZON_PRODUCT_STATUS_MAP = {
+  price_sent:    { app: 'active',      tab: 'active',     cn: '在售' },
+  processed:     { app: 'active',      tab: 'active',     cn: '在售' },
+  moderated:     { app: 'active',      tab: 'active',     cn: '在售' },
+  moderating:    { app: 'moderating',  tab: 'moderating', cn: '审核中' },
+  price_failed:  { app: 'price_error', tab: 'price_error',cn: '价格错误' },
+  moderate_failed: { app: 'failed',    tab: 'failed',     cn: '审核失败' },
+  failed:        { app: 'failed',      tab: 'failed',     cn: '创建失败' },
+  archived:      { app: 'inactive',    tab: 'archived',   cn: '已归档' },
+}
+const mapProductStatus = (raw) => {
+  const v = OZON_PRODUCT_STATUS_MAP[raw]
+  if (v) return v
+  // 默认映射：无状态视为已下架
+  if (!raw) return { app: 'inactive', tab: 'inactive', cn: '未上架' }
+  return { app: 'moderating', tab: 'moderating', cn: raw }
+}
+
 // ---- 商品详情适配器（v3/product/info/list） ----
-// 含名称/价格/图片/库存/佣金/状态
+// 实测响应: { items: [{ id, offer_id, name, price, old_price, currency_code,
+//   primary_image: [...], images: [...], commissions: [...], stocks: {...},
+//   statuses: { status, moderate_status, ... }, is_archived, ... }] }
 export const adaptProductDetails = (items = []) => {
   const stockMap = {}
   const priceMap = {}
   items.forEach(it => {
     const pid = it.id || it.product_id
-    // 库存：取 FBS stocks
-    const fbsStocks = (it.stocks?.stocks || []).filter(s => s.source === 'fbs')
-    const fbsStock = fbsStocks[0]
-    stockMap[pid] = num(fbsStock?.present || 0)
+    // 库存：取 FBS + FBO 总和
+    const allStocks = (it.stocks?.stocks || [])
+    stockMap[pid] = allStocks.reduce((sum, s) => sum + num(s.present || 0), 0)
     // 价格
     priceMap[pid] = { price: num(it.price || 0), oldPrice: num(it.old_price || 0) }
   })
@@ -132,7 +154,12 @@ export const adaptProductDetails = (items = []) => {
     const fbsCommission = commissions.find(c => c.sale_schema === 'FBS')
     const fboCommission = commissions.find(c => c.sale_schema === 'FBO')
     const errors = (it.errors || []).filter(e => e.level === 'ERROR_LEVEL_ERROR')
-
+    const rawStatus = it.statuses?.status || ''
+    const mappedStatus = mapProductStatus(rawStatus)
+    const primaryImg = Array.isArray(it.primary_image) ? it.primary_image[0]
+                     : (typeof it.primary_image === 'string' && it.primary_image ? it.primary_image : '')
+    const imgs = Array.isArray(it.images) ? it.images
+               : (typeof it.images === 'string' && it.images ? it.images.split(' ') : [])
     return {
       id:          pid,
       product_id:  pid,
@@ -145,19 +172,20 @@ export const adaptProductDetails = (items = []) => {
       sold:        0,       // 商品列表不返回销量
       rating:      0,       // 商品列表不返回评分
       reviews:     0,       // 商品列表不返回评价数
-      image:       it.primary_image?.[0] || it.images?.[0] || '',
-      images:      it.images || [],
+      image:       primaryImg || imgs[0] || '',
+      images:      imgs,
       currency:    it.currency_code || 'CNY',
       categoryId:  it.description_category_id || 0,
-      status:      it.statuses?.status === 'price_sent' ? 'active' : 'inactive',
-      visibility:  it.statuses?.status || '',
-      statusText:  it.statuses?.status_name || '—',
+      categoryName: '',     // 需要额外接口才能拿到类目名
+      status:      mappedStatus.app,
+      visibility:  rawStatus,
+      statusText:  it.statuses?.status_name || mappedStatus.cn,
       moderateStatus: it.statuses?.moderate_status || '',
-      archived:    it.is_archived || false,
+      archived:    it.is_archived || (it._is_archived_list ?? false),
       isDiscounted: it.is_discounted || false,
-      // 佣金
-      commissionFBO: fboCommission?.value || fboCommission?.percent || 0,
-      commissionFBS: fbsCommission?.value || fbsCommission?.percent || 0,
+      // 佣金（用 percent 字段，与 Ozon 后台显示一致）
+      commissionFBO: fboCommission?.percent ?? fboCommission?.value ?? 0,
+      commissionFBS: fbsCommission?.percent ?? fbsCommission?.value ?? 0,
       // 重量
       volumeWeight: num(it.volume_weight),
       // 错误
@@ -165,6 +193,8 @@ export const adaptProductDetails = (items = []) => {
       errorCount:  errors.length,
       // 促销
       hasPromo:    (it.promotions || []).some(p => p.is_enabled),
+      // 原始 payload
+      _raw:        it,
     }
   })
 }
@@ -326,29 +356,12 @@ export const loadRealData = async () => {
     console.log(`[ERP] 订单加载: mode=${orderMode}, FBO=${fboList.length}, FBS=${fbsList.length}, 合并后=${unique.length}`)
   } catch (e) { console.warn('[ERP] 订单加载失败:', e.message) }
 
-  // 商品列表（v3，无名称）
+  // 商品（一次性拉列表+详情，超过 5000 个商品会被强制截断）
   try {
-    const listRes = await getProducts()
-    const items = deepGet(listRes, 'result.items') || deepGet(listRes, 'result') || []
-    results.products = adaptProductList(items)
-  } catch (e) { console.warn('[ERP] 商品列表加载失败:', e.message) }
-
-  // 商品详情（需要 offer_id 数组，分批 100 个）
-  try {
-    const listRes = await getProducts()
-    const allItems = deepGet(listRes, 'result.items') || deepGet(listRes, 'result') || []
-    const offerIds = allItems.map(i => i.offer_id).filter(Boolean)
-    const details = []
-    for (let i = 0; i < offerIds.length; i += 100) {
-      const batch = offerIds.slice(i, i + 100)
-      try {
-        const batchRes = await getProductDetails(batch)
-        const batchItems = batchRes?.items || batchRes?.result || []
-        details.push(...batchItems)
-      } catch (e) { console.warn(`[ERP] 商品详情第${Math.floor(i/100)+1}批失败:`, e.message) }
-    }
+    const details = await fetchAllProducts({ visibility: 'ALL' })
     results.products = adaptProductDetails(details)
-  } catch (e) { console.warn('[ERP] 商品详情加载失败:', e.message) }
+    console.log(`[ERP] 商品加载: ${details.length} 个`)
+  } catch (e) { console.warn('[ERP] 商品加载失败:', e.message) }
 
   // 销售分析
   try {

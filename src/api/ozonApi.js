@@ -76,9 +76,65 @@ export const getOrdersFBS = (params = {}) => {
 }
 
 // ---- 商品列表 ----
-/** v3/product/list：返回 { result: { items: [...] } } */
+/** v3/product/list：返回 { result: { items: [{product_id, offer_id, is_archived}], last_id } } */
 export const getProducts = (params = {}) =>
-  ozonRequest(OZON_ENDPOINTS.productList, { filter: {}, limit: 100, offset: 0, ...params })
+  ozonRequest(OZON_ENDPOINTS.productList, { filter: { visibility: 'ALL' }, limit: 100, last_id: '', ...params })
+
+/**
+ * 分页拉取所有商品 ID（带 archived）
+ * 返回 [{ product_id, offer_id, is_archived }]
+ */
+export const fetchAllProductIds = async (filter = { visibility: 'ALL' }) => {
+  const out = []
+  let lastId = ''
+  // 安全上限：最多 50 页 × 100 = 5000 个商品
+  for (let i = 0; i < 50; i++) {
+    const r = await getProducts({ filter, limit: 100, last_id: lastId })
+    const items = (r.result && r.result.items) || (Array.isArray(r.items) ? r.items : [])
+    out.push(...items)
+    lastId = (r.result && r.result.last_id) || ''
+    if (!lastId || items.length < 100) break
+  }
+  return out
+}
+
+/**
+ * 批量拉商品详情（按 product_id 数组）
+ * v3/product/info/list 返 { items: [...] }（无 result 外壳）
+ * 实测批次 50 稳定（100 偶发空响应）
+ */
+export const fetchProductsDetail = async (productIds = []) => {
+  const BATCH = 50
+  const out = []
+  for (let i = 0; i < productIds.length; i += BATCH) {
+    const batch = productIds.slice(i, i + BATCH)
+    try {
+      const r = await ozonRequest(OZON_ENDPOINTS.productInfoList, { product_id: batch })
+      // 双格式兼容
+      const items = Array.isArray(r.items) ? r.items
+                  : (r.result && Array.isArray(r.result.items) ? r.result.items : [])
+      out.push(...items)
+    } catch (e) {
+      console.warn('[fetchProductsDetail] batch failed:', e.message)
+    }
+  }
+  return out
+}
+
+/**
+ * 拉所有商品详情（一站式：列表 + 详情）
+ */
+export const fetchAllProducts = async (filter = { visibility: 'ALL' }) => {
+  const ids = await fetchAllProductIds(filter)
+  const productIds = ids.map(x => x.product_id).filter(Boolean)
+  const details = await fetchProductsDetail(productIds)
+  // 合并 archived 状态（详情里 is_archived 可能不完全准确）
+  const archivedMap = new Map(ids.map(x => [x.product_id, x.is_archived]))
+  return details.map(d => ({
+    ...d,
+    _is_archived_list: archivedMap.get(d.id) ?? d.is_archived
+  }))
+}
 
 // ---- 商品详情（批量） ----
 /** v3/product/info/list：入参 offer_id[] 或 product_id[] */

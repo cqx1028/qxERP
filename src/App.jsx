@@ -2054,9 +2054,10 @@ const Orders = ({ orders, setOrders, onRefresh, isLoading }) => {
 const PRODUCT_STATUS_MAP = {
   active:      { key: 'active',      label: '在售',       color: 'bg-green-100 text-green-700' },
   inactive:    { key: 'inactive',    label: '已下架',     color: 'bg-gray-100 text-gray-600' },
-  price_sent:  { key: 'price_sent',  label: '价格错误',   color: 'bg-red-100 text-red-700' },
+  price_error: { key: 'price_error', label: '价格错误',   color: 'bg-red-100 text-red-700' },
   moderating:  { key: 'moderating',  label: '审核中',     color: 'bg-yellow-100 text-yellow-700' },
   failed:      { key: 'failed',      label: '创建失败',   color: 'bg-red-100 text-red-700' },
+  archived:    { key: 'archived',    label: '已归档',     color: 'bg-gray-100 text-gray-500' },
 }
 
 const Products = ({ products, setProducts }) => {
@@ -2074,7 +2075,7 @@ const Products = ({ products, setProducts }) => {
     { key: 'all',       label: '所有' },
     { key: 'active',    label: '在售' },
     { key: 'inactive',  label: '已下架' },
-    { key: 'price_sent',label: '价格错误' },
+    { key: 'price_error',label: '价格错误' },
     { key: 'moderating',label: '审核中' },
     { key: 'archived',  label: '已归档' },
   ]
