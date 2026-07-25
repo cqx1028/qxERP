@@ -4,19 +4,22 @@ import React, { useState, useEffect } from 'react';
  * 静态密码登录门
  *
  * 安全模型（前端拦截级别）：
- * - 默认密码: ozon2026（首次登录后会在提示中引导修改）
+ * - 默认密码: qxerp2026
  * - 密码哈希后存 sessionStorage（关浏览器即失效）
  * - 会话空闲 30 分钟自动登出
- * - 源码在 GitHub 公开，可见哈希值 → 资深用户可绕过
- *   这是「防君子不防小人」的拦截层，真要严防需配合 Cloudflare Access（需域名）
+ * - 源码在 GitHub 公开 → 这是「防君子不防小人」的拦截层
  *
- * 升级路径：
- * - 接入 Ozon 密钥后，建议改用 Web Crypto API 加密存储 Client-Id + Api-Key
+ * 关键改进（防止白屏）：
+ * - 加 ready 标志，sessionStorage 检查完成前显示加载占位（避免在未授权时短暂渲染 children）
+ * - 加 try/catch 保护 sessionStorage 访问（隐私模式或权限异常不会导致整个组件挂掉）
+ * - 加 console.warn 调试日志
  */
 
-const DEFAULT_HASH = '48fb8e6c9f0cba1b8e36d4e9c6d2b6e3a1f8b7c4d5e9f2a6b8c1d3e5f7a9b2c4d'; // placeholder
+const SESSION_KEY = 'qxerp.auth';
+const TIMESTAMP_KEY = 'qxerp.auth.ts';
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 分钟
 
-// SHA-256 同步实现（用于浏览器原生 crypto.subtle）
+// SHA-256 异步实现
 async function sha256(text) {
   const buf = await crypto.subtle.digest(
     'SHA-256',
@@ -27,30 +30,36 @@ async function sha256(text) {
     .join('');
 }
 
-const SESSION_KEY = 'qxerp.auth';
-const TIMESTAMP_KEY = 'qxerp.auth.ts';
-const HOURS_KEY = 'qxerp.auth.hours';
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 分钟
+// SHA-256('qxerp2026') = d1e23be8e07451eb08303a08cfde1e235cb1dcf0110c9d3ac5fc34b45098bc78
+const ALLOW_HASH = 'd1e23be8e07451eb08303a08cfde1e235cb1dcf0110c9d3ac5fc34b45098bc78';
 
 export default function LoginGate({ children }) {
   const [authed, setAuthed] = useState(false);
+  const [ready, setReady] = useState(false); // sessionStorage 检查完成
   const [pwd, setPwd] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // 初始化检查
+  // 初始化检查 + 空闲监听
   useEffect(() => {
-    const stored = sessionStorage.getItem(SESSION_KEY);
-    const ts = sessionStorage.getItem(TIMESTAMP_KEY);
-    if (stored && ts) {
-      const age = Date.now() - parseInt(ts, 10);
-      if (age < SESSION_TTL_MS) {
-        setAuthed(true);
-      } else {
-        // 过期
-        sessionStorage.removeItem(SESSION_KEY);
-        sessionStorage.removeItem(TIMESTAMP_KEY);
+    // 检查会话
+    try {
+      const stored = sessionStorage.getItem(SESSION_KEY);
+      const ts = sessionStorage.getItem(TIMESTAMP_KEY);
+      if (stored && ts) {
+        const age = Date.now() - parseInt(ts, 10);
+        if (!Number.isNaN(age) && age < SESSION_TTL_MS) {
+          setAuthed(true);
+        } else {
+          // 过期清理
+          sessionStorage.removeItem(SESSION_KEY);
+          sessionStorage.removeItem(TIMESTAMP_KEY);
+        }
       }
+    } catch (e) {
+      console.warn('[LoginGate] sessionStorage 读取失败:', e);
+    } finally {
+      setReady(true);
     }
 
     // 空闲监听
@@ -58,8 +67,10 @@ export default function LoginGate({ children }) {
     const reset = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        sessionStorage.removeItem(SESSION_KEY);
-        sessionStorage.removeItem(TIMESTAMP_KEY);
+        try {
+          sessionStorage.removeItem(SESSION_KEY);
+          sessionStorage.removeItem(TIMESTAMP_KEY);
+        } catch {}
         setAuthed(false);
         setErr('会话超时，请重新登录');
       }, SESSION_TTL_MS);
@@ -67,6 +78,7 @@ export default function LoginGate({ children }) {
     const events = ['mousemove', 'keydown', 'click', 'scroll'];
     events.forEach((e) => window.addEventListener(e, reset));
     reset();
+
     return () => {
       events.forEach((e) => window.removeEventListener(e, reset));
       if (timer) clearTimeout(timer);
@@ -79,44 +91,64 @@ export default function LoginGate({ children }) {
     setBusy(true);
     try {
       const hash = await sha256(pwd);
-      // SHA-256('qxerp2026') = d1e23be8e07451eb08303a08cfde1e235cb1dcf0110c9d3ac5fc34b45098bc78
-      const ALLOW = {
-        'd1e23be8e07451eb08303a08cfde1e235cb1dcf0110c9d3ac5fc34b45098bc78':
-          'qxerp2026',
-      };
-      if (ALLOW[hash]) {
-        sessionStorage.setItem(SESSION_KEY, 'ok');
-        sessionStorage.setItem(TIMESTAMP_KEY, String(Date.now()));
-        sessionStorage.setItem(HOURS_KEY, new Date().toLocaleString('zh-CN'));
+      if (hash === ALLOW_HASH) {
+        try {
+          sessionStorage.setItem(SESSION_KEY, 'ok');
+          sessionStorage.setItem(TIMESTAMP_KEY, String(Date.now()));
+        } catch (e) {
+          console.warn('[LoginGate] sessionStorage 写入失败:', e);
+        }
         setAuthed(true);
         setPwd('');
       } else {
         setErr('密码错误');
       }
     } catch (e) {
-      setErr('登录失败：' + e.message);
+      setErr('登录失败：' + (e.message || String(e)));
     } finally {
       setBusy(false);
     }
   };
 
   const handleLogout = () => {
-    sessionStorage.removeItem(SESSION_KEY);
-    sessionStorage.removeItem(TIMESTAMP_KEY);
+    try {
+      sessionStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(TIMESTAMP_KEY);
+    } catch {}
     setAuthed(false);
   };
 
-  // 把登出方法挂到全局，方便 App 顶栏调用
+  // 把登出方法挂到全局
   useEffect(() => {
     if (authed) {
       window.__qxerpLogout = handleLogout;
     } else {
       delete window.__qxerpLogout;
     }
+    return () => {
+      // 卸载时清理
+      if (!authed) delete window.__qxerpLogout;
+    };
   }, [authed]);
 
+  // 加载占位（避免 sessionStorage 检查期间的白屏）
+  if (!ready) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+        <div className="text-center">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-orange-400 to-pink-500 rounded-2xl text-3xl mb-3 animate-pulse">
+            🐱
+          </div>
+          <div className="text-sm text-gray-500">加载中...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // 已登录 → 渲染主应用
   if (authed) return children;
 
+  // 未登录 → 登录表单
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
       <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
